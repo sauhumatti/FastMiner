@@ -73,6 +73,12 @@ let player = {
   visionUpgradeLevel: 0     // +1 vision radius per upgrade.
 };
 
+// Add this after the player object definition
+const portalLocations = {
+  // Will store discovered portal locations by level
+  // Format: { level: { next: {x,y}, prev: {x,y} } }
+};
+
 /***************************************
  * MAPPING & SCALING DATA
  ***************************************/
@@ -117,7 +123,7 @@ function getGroundColorForLevel(level) {
 function generateLevel(level) {
   let grid = Array.from({ length: gridHeight }, (_, row) =>
     Array.from({ length: gridWidth }, (_, col) => {
-      let tile = { revealed: false, visible: false };
+      let tile = { revealed: false, visible: false, beingMined: false, animationStartTime: 0 };
       if (col < spawnXStart || col > spawnXEnd || row < spawnYStart || row > spawnYEnd) {
         if (Math.random() < oreChance) {
           tile.type = "ore";
@@ -188,11 +194,25 @@ function updateVision() {
   const effectiveVisionRadius = VISION_RADIUS + player.visionUpgradeLevel;
   const visionCenterX = player.x + Math.floor(player.size / 2);
   const visionCenterY = player.y + Math.floor(player.size / 2);
+  
+  if (!portalLocations[currentLevel]) {
+    portalLocations[currentLevel] = {};
+  }
+  
   for (let row = 0; row < gridHeight; row++) {
     for (let col = 0; col < gridWidth; col++) {
       if (Math.max(Math.abs(col - visionCenterX), Math.abs(row - visionCenterY)) <= effectiveVisionRadius) {
         tiles[row][col].visible = true;
         tiles[row][col].revealed = true;
+        
+        // Track portal locations when discovered
+        if (tiles[row][col].type === "door") {
+          if (tiles[row][col].doorFor === "next") {
+            portalLocations[currentLevel].next = { x: col, y: row };
+          } else if (tiles[row][col].doorFor === "prev") {
+            portalLocations[currentLevel].prev = { x: col, y: row };
+          }
+        }
       } else {
         tiles[row][col].visible = false;
       }
@@ -279,6 +299,11 @@ function tryMove(dx, dy) {
     for (let i = 0; i < player.size; i++) {
       for (let j = 0; j < player.size; j++) {
         let tile = tiles[newY + j][newX + i];
+        if (!tile.beingMined) {
+          tile.beingMined = true;
+          tile.animationStartTime = Date.now();
+        }
+        tile.beingMined = true;  // Set the tile as being mined
         if (tile.type === "door") {
           if (tile.doorFor === "next") {
             if (tile.doorState === "locked") {
@@ -298,6 +323,7 @@ function tryMove(dx, dy) {
           tile.hp -= drillDamage;
           console.log(`Damaging tile at (${newX+i},${newY+j}). Remaining HP: ${tile.hp}/${tile.maxHp}`);
           if (tile.hp <= 0) {
+            tile.beingMined = false;  // Reset when fully mined
             tile.hp = 0;
             tile.type = "mined";
             if (tile.resource) {
@@ -342,6 +368,7 @@ document.addEventListener("keyup", (event) => {
   if (direction && direction === currentDirection) {
     currentDirection = null;
     isMoving = false;
+    resetMiningState();  // Reset mining state when key is released
   }
 });
 
@@ -429,6 +456,50 @@ canvas.addEventListener("click", (event) => {
   }
 });
 
+// Add these new functions for quickbuy
+function quickBuyDrill() {
+  const cost = getDrillUpgradeCost();
+  if ((player.materials["Copper"] || 0) >= cost) {
+    player.materials["Copper"] -= cost;
+    player.drillUpgradeLevel++;
+    console.log("Purchased drill upgrade! New drill damage: " + (1 + player.drillUpgradeLevel));
+  } else {
+    console.log("Not enough Copper for drill upgrade!");
+  }
+}
+
+function quickBuySize() {
+  if (player.size >= 3) return;
+  const cost = getSizeUpgradeCost();
+  if ((player.materials["Copper"] || 0) >= cost) {
+    player.materials["Copper"] -= cost;
+    player.size++;
+    player.x = spawnCenterX;
+    player.y = spawnCenterY;
+    console.log("Purchased size upgrade! New player size: " + player.size + "×" + player.size);
+  } else {
+    console.log("Not enough Copper for size upgrade!");
+  }
+}
+
+function quickBuyVision() {
+  const cost = getVisionUpgradeCost();
+  if ((player.materials["Copper"] || 0) >= cost) {
+    player.materials["Copper"] -= cost;
+    player.visionUpgradeLevel++;
+    console.log("Purchased vision upgrade! New effective vision radius: " + (VISION_RADIUS + player.visionUpgradeLevel));
+  } else {
+    console.log("Not enough Copper for vision upgrade!");
+  }
+}
+
+// Add event listeners for quickbuy keys
+document.addEventListener("keydown", (event) => {
+  if (event.key === "1") quickBuyDrill();
+  if (event.key === "2") quickBuySize();
+  if (event.key === "3") quickBuyVision();
+});
+
 /***************************************
  * DRAW INVENTORY FUNCTION (Left Side Style)
  ***************************************/
@@ -468,22 +539,28 @@ function drawInventory() {
  ***************************************/
 function drawShop() {
   if (!shopOpen) return;
-  const shopWidth = 300, shopHeight = 260;
-  const shopPosX = 20, shopPosY = 340;  // Below inventory with some spacing
+  const shopWidth = 300, shopHeight = 300;  // Increased height
+  const shopPosX = 20, shopPosY = canvas.height - shopHeight - 20;  // Position from bottom
+  
+  // Ensure shop doesn't render off-screen
+  const adjustedShopPosY = Math.min(shopPosY, canvas.height - shopHeight - 10);
+  
   ctx.fillStyle = "rgba(50,50,50,0.9)";
-  ctx.fillRect(shopPosX, shopPosY, shopWidth, shopHeight);
+  ctx.fillRect(shopPosX, adjustedShopPosY, shopWidth, shopHeight);
   ctx.strokeStyle = "white";
-  ctx.strokeRect(shopPosX, shopPosY, shopWidth, shopHeight);
+  ctx.strokeRect(shopPosX, adjustedShopPosY, shopWidth, shopHeight);
   ctx.fillStyle = "white";
   ctx.font = "22px Arial";
-  ctx.fillText("Shop", shopPosX + 20, shopPosY + 30);
+  ctx.fillText("Shop", shopPosX + 20, adjustedShopPosY + 30);
   ctx.font = "16px Arial";
+  
   // Drill Upgrade Section
   const drillUpgradeCost = getDrillUpgradeCost();
-  ctx.fillText(`Drill Damage: ${1 + player.drillUpgradeLevel}`, shopPosX + 20, shopPosY + 60);
-  ctx.fillText(`Cost: ${drillUpgradeCost} Copper`, shopPosX + 20, shopPosY + 80);
+  ctx.fillText(`Drill Damage: ${1 + player.drillUpgradeLevel}`, shopPosX + 20, adjustedShopPosY + 60);
+  ctx.fillText(`Cost: ${drillUpgradeCost} Copper`, shopPosX + 20, adjustedShopPosY + 80);
+  ctx.fillText("Quickbuy: Press 1", shopPosX + 20, adjustedShopPosY + 100);
   const buttonWidth = 100, buttonHeight = 30;
-  const drillButtonX = shopPosX + shopWidth - buttonWidth - 20, drillButtonY = shopPosY + 50;
+  const drillButtonX = shopPosX + shopWidth - buttonWidth - 20, drillButtonY = adjustedShopPosY + 50;
   ctx.fillStyle = "darkgreen";
   ctx.fillRect(drillButtonX, drillButtonY, buttonWidth, buttonHeight);
   ctx.strokeStyle = "white";
@@ -495,9 +572,10 @@ function drawShop() {
   // Size Upgrade Section
   if (player.size < 3) {
     const sizeUpgradeCost = getSizeUpgradeCost();
-    ctx.fillText(`Player Size: ${player.size}×${player.size}`, shopPosX + 20, shopPosY + 120);
-    ctx.fillText(`Cost: ${sizeUpgradeCost} Copper`, shopPosX + 20, shopPosY + 140);
-    const sizeButtonX = shopPosX + shopWidth - buttonWidth - 20, sizeButtonY = shopPosY + 110;
+    ctx.fillText(`Player Size: ${player.size}×${player.size}`, shopPosX + 20, adjustedShopPosY + 140);
+    ctx.fillText(`Cost: ${sizeUpgradeCost} Copper`, shopPosX + 20, adjustedShopPosY + 160);
+    ctx.fillText("Quickbuy: Press 2", shopPosX + 20, adjustedShopPosY + 180);
+    const sizeButtonX = shopPosX + shopWidth - buttonWidth - 20, sizeButtonY = adjustedShopPosY + 130;
     ctx.fillStyle = "darkblue";
     ctx.fillRect(sizeButtonX, sizeButtonY, buttonWidth, buttonHeight);
     ctx.strokeStyle = "white";
@@ -506,15 +584,16 @@ function drawShop() {
     ctx.fillText("Buy", sizeButtonX + 30, sizeButtonY + 20);
     shopSizeButtonRect = { x: sizeButtonX, y: sizeButtonY, width: buttonWidth, height: buttonHeight };
   } else {
-    ctx.fillText("Max size reached!", shopPosX + 20, shopPosY + 120);
+    ctx.fillText("Max size reached!", shopPosX + 20, adjustedShopPosY + 140);
     shopSizeButtonRect = null;
   }
   
   // Vision Upgrade Section
   const visionUpgradeCost = getVisionUpgradeCost();
-  ctx.fillText(`Vision Radius: ${VISION_RADIUS + player.visionUpgradeLevel}`, shopPosX + 20, shopPosY + 180);
-  ctx.fillText(`Cost: ${visionUpgradeCost} Copper`, shopPosX + 20, shopPosY + 200);
-  const visionButtonX = shopPosX + shopWidth - buttonWidth - 20, visionButtonY = shopPosY + 170;
+  ctx.fillText(`Vision Radius: ${VISION_RADIUS + player.visionUpgradeLevel}`, shopPosX + 20, adjustedShopPosY + 220);
+  ctx.fillText(`Cost: ${visionUpgradeCost} Copper`, shopPosX + 20, adjustedShopPosY + 240);
+  ctx.fillText("Quickbuy: Press 3", shopPosX + 20, adjustedShopPosY + 260);
+  const visionButtonX = shopPosX + shopWidth - buttonWidth - 20, visionButtonY = adjustedShopPosY + 210;
   ctx.fillStyle = "purple";
   ctx.fillRect(visionButtonX, visionButtonY, buttonWidth, buttonHeight);
   ctx.strokeStyle = "white";
@@ -530,6 +609,145 @@ function drawShop() {
 function tileToPixel(coord) {
   return coord * tileSize;
 }
+
+/***************************************
+ * CRACK PATTERNS AND ANIMATIONS
+ ***************************************/
+const crackPatterns = {
+  light: [
+    [0.2, 0.2, 0.4, 0.4],
+    [0.6, 0.1, 0.8, 0.3],
+    [0.1, 0.7, 0.3, 0.9]
+  ],
+  medium: [
+    [0.1, 0.1, 0.5, 0.5],
+    [0.7, 0.2, 0.9, 0.6],
+    [0.2, 0.7, 0.6, 0.9],
+    [0.5, 0.4, 0.8, 0.8]
+  ],
+  heavy: [
+    [0.1, 0.1, 0.9, 0.9],
+    [0.2, 0.3, 0.8, 0.7],
+    [0.3, 0.1, 0.7, 0.4],
+    [0.1, 0.6, 0.4, 0.9],
+    [0.6, 0.5, 0.9, 0.8]
+  ]
+};
+
+const mineralPatterns = [
+  [0.3, 0.3, 0.7, 0.7],
+  [0.2, 0.5, 0.8, 0.5],
+  [0.5, 0.2, 0.5, 0.8],
+];
+
+const doorPatterns = [
+  [0.1, 0.1, 0.9, 0.9],
+  [0.1, 0.9, 0.9, 0.1],
+  [0.5, 0.1, 0.5, 0.9],
+  [0.1, 0.5, 0.9, 0.5],
+];
+
+function drawCracks(x, y, width, height, hpPercent) {
+  if (hpPercent >= 1) return;
+  
+  const originalLineWidth = ctx.lineWidth; // Store original line width
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
+  ctx.lineWidth = 2;
+  
+  if (hpPercent <= 0.75) {
+    crackPatterns.light.forEach(([x1, y1, x2, y2]) => {
+      ctx.beginPath();
+      ctx.moveTo(x + x1 * width, y + y1 * height);
+      ctx.lineTo(x + x2 * width, y + y2 * height);
+      ctx.stroke();
+    });
+  }
+  
+  if (hpPercent <= 0.5) {
+    crackPatterns.medium.forEach(([x1, y1, x2, y2]) => {
+      ctx.beginPath();
+      ctx.moveTo(x + x1 * width, y + y1 * height);
+      ctx.lineTo(x + x2 * width, y + y2 * height);
+      ctx.stroke();
+    });
+  }
+  
+  if (hpPercent <= 0.25) {
+    crackPatterns.heavy.forEach(([x1, y1, x2, y2]) => {
+      ctx.beginPath();
+      ctx.moveTo(x + x1 * width, y + y1 * height);
+      ctx.lineTo(x + x2 * width, y + y2 * height);
+      ctx.stroke();
+    });
+  }
+
+  ctx.lineWidth = originalLineWidth; // Restore original line width
+}
+
+function drawMineralAnimation(x, y, width, height, startTime) {
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+  ctx.lineWidth = 2;
+  
+  const animationSpeed = 2000; // 2 seconds per cycle
+  const currentTime = Date.now();
+  const cyclePosition = ((currentTime - startTime) % animationSpeed) / animationSpeed;
+  
+  mineralPatterns.forEach(([x1, y1, x2, y2], index) => {
+    const offset = (cyclePosition + index / mineralPatterns.length) % 1;
+    ctx.beginPath();
+    ctx.moveTo(x + x1 * width, y + y1 * height);
+    ctx.lineTo(
+      x + (x1 + (x2 - x1) * offset) * width,
+      y + (y1 + (y2 - y1) * offset) * height
+    );
+    ctx.stroke();
+  });
+}
+
+function drawDoorAnimation(x, y, width, height, isLocked) {
+  ctx.strokeStyle = isLocked ? "rgba(255, 0, 0, 0.5)" : "rgba(0, 255, 0, 0.5)";
+  ctx.lineWidth = 3;
+  
+  const animationSpeed = 3000; // 3 seconds per cycle
+  const cyclePosition = (Date.now() % animationSpeed) / animationSpeed;
+  
+  doorPatterns.forEach(([x1, y1, x2, y2], index) => {
+    const offset = (cyclePosition + index / doorPatterns.length) % 1;
+    ctx.beginPath();
+    ctx.moveTo(
+      x + (x1 + (x2 - x1) * offset) * width,
+      y + (y1 + (y2 - y1) * offset) * height
+    );
+    ctx.lineTo(x + x2 * width, y + y2 * height);
+    ctx.stroke();
+  });
+}
+
+// Add new function to draw coordinates
+function drawCoordinates() {
+  const padding = 10;
+  const lineHeight = 20;
+  let y = canvas.height - padding;
+  
+  ctx.font = "16px Arial";
+  ctx.fillStyle = "white";
+  ctx.textAlign = "right";
+  
+  // Player coordinates
+  ctx.fillText(`Player: (${player.x}, ${player.y})`, canvas.width - padding, y);
+  y -= lineHeight;
+  
+  // Portal coordinates for current level
+  const levelPortals = portalLocations[currentLevel] || {};
+  if (levelPortals.next) {
+    ctx.fillText(`Next Portal: (${levelPortals.next.x}, ${levelPortals.next.y})`, canvas.width - padding, y);
+    y -= lineHeight;
+  }
+  if (levelPortals.prev) {
+    ctx.fillText(`Previous Portal: (${levelPortals.prev.x}, ${levelPortals.prev.y})`, canvas.width - padding, y);
+  }
+}
+
 function render() {
   updateVision();
   
@@ -578,18 +796,18 @@ function render() {
       ctx.strokeStyle = "#333";
       ctx.strokeRect(tileToPixel(col), tileToPixel(row), tileSize, tileSize);
       
-      if (tile.visible && ((tile.type === "ground" || tile.type === "ore" ||
-         (tile.type === "door" && tile.doorFor === "next" && tile.doorState === "locked"))
-         && tile.maxHp > 0)) {
-        const barMargin = 2, barWidth = tileSize - 2*barMargin, barHeight = 4;
-        const barX = tileToPixel(col) + barMargin, barY = tileToPixel(row) + barMargin;
-        ctx.fillStyle = "red";
-        ctx.fillRect(barX, barY, barWidth, barHeight);
-        let hpRatio = tile.hp / tile.maxHp, filledWidth = barWidth * hpRatio;
-        ctx.fillStyle = "limegreen";
-        ctx.fillRect(barX, barY, filledWidth, barHeight);
-        ctx.strokeStyle = "black";
-        ctx.strokeRect(barX, barY, barWidth, barHeight);
+      if (tile.visible) {
+        const tileX = tileToPixel(col);
+        const tileY = tileToPixel(row);
+        if (tile.type === "ore") {
+          drawMineralAnimation(tileX, tileY, tileSize, tileSize, tile.animationStartTime);
+        } else if (tile.type === "door") {
+          drawDoorAnimation(tileX, tileY, tileSize, tileSize, tile.doorState === "locked");
+        }
+        if ((tile.type === "ground" || tile.type === "ore") && tile.maxHp > 0) {
+          const hpRatio = tile.hp / tile.maxHp;
+          drawCracks(tileX, tileY, tileSize, tileSize, hpRatio);
+        }
       }
     }
   }
@@ -599,10 +817,30 @@ function render() {
   
   ctx.restore();
   
+  // Draw level title
+  ctx.font = "24px Arial";
+  ctx.fillStyle = "white";
+  ctx.textAlign = "center";
+  ctx.fillText(`Level ${currentLevel}`, canvas.width / 2, 30);
+  
   drawInventory();
   drawShop();
+  drawCoordinates(); // Add this line before requestAnimationFrame
   
   requestAnimationFrame(render);
+}
+
+// Add this function to reset the 'beingMined' state
+function resetMiningState() {
+  for (let row = 0; row < gridHeight; row++) {
+    for (let col = 0; col < gridWidth; col++) {
+      if (tiles[row][col].beingMined) {
+        tiles[row][col].beingMined = false;
+        // Keep the animation going, just update the start time
+        tiles[row][col].animationStartTime = Date.now();
+      }
+    }
+  }
 }
 
 /***************************************
