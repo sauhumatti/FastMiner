@@ -90,7 +90,6 @@
     const spawnYStart = spawnCenterY - spawnHalf;
     const spawnYEnd   = spawnCenterY + spawnHalf;
 
-    const oreChance = 0.2;
     const maxLevel = 10;
     let currentLevel = 1;
 
@@ -110,7 +109,10 @@
       materials: {},
       drillUpgradeLevel: 0,
       size: 1,
-      visionUpgradeLevel: 0
+      visionUpgradeLevel: 0,
+      drillSpeedLevel: 0,
+      comboStreak: 0,
+      lastMineTime: 0
     };
 
     const portalLocations = {};
@@ -299,12 +301,12 @@
         }
       };
     });
-    const upgradeThresholds = { tier1: 50, tier2: 200, tier3: 500, tier4: 2000 };
+    const upgradeThresholds = { tier1: 25, tier2: 75, tier3: 200, tier4: 500 };
     const skillUpgradeOptions = {
-      tier1: { power: "+1 power", yield: "25% chance extra" },
-      tier2: { power: "+2 power", yield: "Double yield" },
-      tier3: { power: "+5 power", yield: "Triple yield" },
-      tier4: { power: "One shot", yield: "5x yield" }
+      tier1: { power: "+50% damage", yield: "+25% yield" },
+      tier2: { power: "+100% damage (2× total)", yield: "+50% yield" },
+      tier3: { power: "+200% damage (3× total)", yield: "+100% yield (2× total)" },
+      tier4: { power: "+400% damage (5× total) + pierce", yield: "+150% yield (2.5× total)" }
     };
     let pendingSkillUpgrade = null;
 
@@ -312,18 +314,19 @@
      * MAPPING & SCALING DATA
      ***************************************/
     const oreMapping = {
-      1: { mineral: "Copper",   color: "#B87333", baseHP: 3 },
-      2: { mineral: "Iron",     color: "#808080", baseHP: 5 },
-      3: { mineral: "Gold",     color: "#FFD700", baseHP: 70 },
-      4: { mineral: "Emerald",  color: "#50C878", baseHP: 100 },
-      5: { mineral: "Sapphire", color: "#0F52BA", baseHP: 120 },
-      6: { mineral: "Ruby",     color: "#E0115F", baseHP: 150 },
-      7: { mineral: "Diamond",  color: "#B9F2FF", baseHP: 180 },
-      8: { mineral: "Amethyst", color: "#9966CC", baseHP: 210 },
-      9: { mineral: "Topaz",    color: "#FFC87C", baseHP: 250 },
-      10: { mineral: "Obsidian", color: "#1C1C1C", baseHP: 300 }
+      1: { mineral: "Copper",   color: "#B87333", baseHP: 8, rarity: 0.30 },
+      2: { mineral: "Iron",     color: "#808080", baseHP: 12, rarity: 0.30 },
+      3: { mineral: "Gold",     color: "#FFD700", baseHP: 18, rarity: 0.15 },
+      4: { mineral: "Emerald",  color: "#50C878", baseHP: 27, rarity: 0.15 },
+      5: { mineral: "Sapphire", color: "#0F52BA", baseHP: 40, rarity: 0.15 },
+      6: { mineral: "Ruby",     color: "#E0115F", baseHP: 60, rarity: 0.08 },
+      7: { mineral: "Diamond",  color: "#B9F2FF", baseHP: 90, rarity: 0.08 },
+      8: { mineral: "Amethyst", color: "#9966CC", baseHP: 135, rarity: 0.08 },
+      9: { mineral: "Topaz",    color: "#FFC87C", baseHP: 200, rarity: 0.03 },
+      10: { mineral: "Obsidian", color: "#1C1C1C", baseHP: 300, rarity: 0.03 }
     };
-    const levelHpScaling = { 1: 5, 2: 6, 3: 7, 4: 85, 5: 100, 6: 120, 7: 145, 8: 175, 9: 210, 10: 250 };
+    // Smooth exponential scaling: HP = 5 × 1.5^(level-1)
+    const levelHpScaling = { 1: 5, 2: 8, 3: 12, 4: 18, 5: 27, 6: 40, 7: 60, 8: 90, 9: 135, 10: 200 };
     function getGroundColorForLevel(level) {
       let lightness;
       switch (level) {
@@ -390,12 +393,26 @@
             }
           } else {
             const random = seededRandom(chunkX, chunkY, level, localX, localY);
+            const oreRarity = oreMapping[level].rarity;
 
-            if (random < oreChance) {
+            if (random < oreRarity) {
               tile.type = "ore";
               tile.resource = oreMapping[level].mineral;
               tile.hp = oreMapping[level].baseHP;
               tile.maxHp = tile.hp;
+
+              // Quality tier system (70% normal, 25% high, 5% perfect)
+              const qualityRoll = seededRandom(chunkX, chunkY, level, localX + 1000, localY + 1000);
+              if (qualityRoll < 0.05) {
+                tile.quality = "perfect";
+                tile.qualityMultiplier = 5;
+              } else if (qualityRoll < 0.30) {
+                tile.quality = "high";
+                tile.qualityMultiplier = 2;
+              } else {
+                tile.quality = "normal";
+                tile.qualityMultiplier = 1;
+              }
             } else {
               tile.type = "ground";
               tile.hp = levelHpScaling[level];
@@ -567,9 +584,36 @@
     let currentDirection = null;
     let isMoving = false;
     const TAP_MOVE_COOLDOWN = 50;
-    const CONTINUOUS_MOVE_INTERVAL = 250;
     let lastPlayerMovementSoundTime = 0;
     const PLAYER_MOVEMENT_SOUND_INTERVAL = 300;
+
+    // Drill speed upgrade levels
+    function getContinuousMoveInterval() {
+      const baseInterval = 250;
+      if (player.drillSpeedLevel === 0) return baseInterval;
+      if (player.drillSpeedLevel === 1) return 200;
+      if (player.drillSpeedLevel === 2) return 150;
+      if (player.drillSpeedLevel >= 3) return 100;
+      return baseInterval;
+    }
+
+    // Combo system
+    function updateCombo() {
+      const now = Date.now();
+      if (now - player.lastMineTime > 3000) {
+        player.comboStreak = 0;
+      } else {
+        player.comboStreak++;
+      }
+      player.lastMineTime = now;
+    }
+
+    function getComboMultiplier() {
+      if (player.comboStreak >= 50) return 1.5;
+      if (player.comboStreak >= 25) return 1.25;
+      if (player.comboStreak >= 10) return 1.1;
+      return 1.0;
+    }
 
     function getDirectionFromKey(key) {
       if (key === "ArrowUp") return "up";
@@ -614,7 +658,20 @@
       } else {
         if (pendingSkillUpgrade) return;
 
-        const drillDamage = 1 + player.drillUpgradeLevel;
+        // Update combo
+        updateCombo();
+
+        // Base damage with size penalty
+        let baseDamage = 1 + player.drillUpgradeLevel;
+        let sizePenalty = 1.0;
+        if (player.size === 2) sizePenalty = 0.75;  // -25% damage
+        if (player.size === 3) sizePenalty = 0.60;  // -40% damage
+        baseDamage *= sizePenalty;
+
+        // Combo multiplier
+        const comboMult = getComboMultiplier();
+        baseDamage *= comboMult;
+
         for (let i = 0; i < player.size; i++) {
           for (let j = 0; j < player.size; j++) {
             let tile = getTileAt(newX + i, newY + j, currentLevel);
@@ -628,7 +685,7 @@
               if (tile.doorFor === "next") {
                 if (tile.doorState === "locked") {
                   playSound("doorDrilling");
-                  tile.hp -= drillDamage;
+                  tile.hp -= baseDamage;
                   console.log(`Damaging NEXT door at (${newX+i},${newY+j}). Remaining HP: ${tile.hp}/${tile.maxHp}`);
                   if (tile.hp <= 0) {
                     tile.hp = 0;
@@ -643,26 +700,32 @@
               }
             } else if (tile.type === "ground" || tile.type === "ore") {
               let isOre = (tile.type === "ore" && tile.resource);
-              let additionalDamage = 0;
-              let oneShot = false;
+              let damageMultiplier = 1.0;
+              let pierce = false;
+
               if (isOre) {
                 let mineral = tile.resource;
                 let skill = mineralSkillTrees[mineral];
                 if (skill) {
-                  if (skill.upgrades.tier1 === "power") additionalDamage += 1;
-                  if (skill.upgrades.tier2 === "power") additionalDamage += 2;
-                  if (skill.upgrades.tier3 === "power") additionalDamage += 5;
-                  if (skill.upgrades.tier4 === "power") { oneShot = true; }
+                  // New power path: percentage multipliers
+                  if (skill.upgrades.tier1 === "power") damageMultiplier += 0.5;   // +50%
+                  if (skill.upgrades.tier2 === "power") damageMultiplier += 1.0;   // +100% (2× total)
+                  if (skill.upgrades.tier3 === "power") damageMultiplier += 2.0;   // +200% (3× total)
+                  if (skill.upgrades.tier4 === "power") {
+                    damageMultiplier += 4.0;  // +400% (5× total)
+                    pierce = true;
+                  }
                 }
               }
-              let totalDamage = drillDamage + additionalDamage;
-              if (isOre && oneShot) { totalDamage = tile.hp; }
+
+              let totalDamage = baseDamage * damageMultiplier;
               tile.hp -= totalDamage;
               if (tile.type === "ground") { playSound("groundMining"); }
               if (tile.type === "ore") {
                 if (tile.hp > 0) { playSound("oreHit"); }
               }
-              console.log(`Damaging tile at (${newX+i},${newY+j}). Remaining HP: ${tile.hp}/${tile.maxHp}`);
+              console.log(`Damaging tile at (${newX+i},${newY+j}). Damage: ${totalDamage.toFixed(1)} (${player.comboStreak}x combo). Remaining HP: ${tile.hp}/${tile.maxHp}`);
+
               if (tile.hp <= 0) {
                 tile.beingMined = false;
                 tile.hp = 0;
@@ -672,18 +735,23 @@
                     let mineral = tile.resource;
                     let skill = mineralSkillTrees[mineral];
                     if (skill) { skill.xp += 1; checkForUpgrade(mineral); }
-                    let yieldAmount = 1;
+
+                    // New yield path: percentage multipliers
+                    let yieldMultiplier = 1.0;
                     if (skill) {
-                      if (skill.upgrades.tier4 === "yield") { yieldAmount = 5; }
-                      else if (skill.upgrades.tier3 === "yield") { yieldAmount = 3; }
-                      else if (skill.upgrades.tier2 === "yield") { yieldAmount = 2; }
-                      else if (skill.upgrades.tier1 === "yield") {
-                        if (Math.random() < 0.25) { yieldAmount = 2; }
-                      }
+                      if (skill.upgrades.tier1 === "yield") yieldMultiplier += 0.25;   // +25%
+                      if (skill.upgrades.tier2 === "yield") yieldMultiplier += 0.50;   // +50%
+                      if (skill.upgrades.tier3 === "yield") yieldMultiplier += 1.00;   // +100% (2× total)
+                      if (skill.upgrades.tier4 === "yield") yieldMultiplier += 1.50;   // +150% (2.5× total)
                     }
+
+                    // Apply quality multiplier
+                    const qualityMult = tile.qualityMultiplier || 1;
+                    let yieldAmount = Math.ceil(yieldMultiplier * qualityMult);
+
                     player.materials[mineral] = (player.materials[mineral] || 0) + yieldAmount;
                     playSound("oreCrack");
-                    console.log(`Collected ${yieldAmount} ${mineral}. Total ${mineral}: ${player.materials[mineral]}`);
+                    console.log(`Collected ${yieldAmount} ${mineral} (${tile.quality || 'normal'}). Total ${mineral}: ${player.materials[mineral]}`);
                   }
                   tile.resource = null;
                 }
@@ -727,7 +795,8 @@
       if (!isMoving || !currentDirection) return;
       if (pendingSkillUpgrade) return;
       const currentTime = Date.now();
-      if (currentTime - lastDamageTimes[currentDirection] < CONTINUOUS_MOVE_INTERVAL) return;
+      const moveInterval = getContinuousMoveInterval();
+      if (currentTime - lastDamageTimes[currentDirection] < moveInterval) return;
       let dx = 0, dy = 0;
       if (currentDirection === "up") dy = -1;
       if (currentDirection === "down") dy = 1;
@@ -736,7 +805,7 @@
       tryMove(dx, dy);
       if (player.x !== spawnCenterX || player.y !== spawnCenterY) playerHasLeftPortal = true;
       lastDamageTimes[currentDirection] = currentTime;
-    }, CONTINUOUS_MOVE_INTERVAL);
+    }, 50);
 
     /***************************************
      * UPGRADE SELECTION (Skill Tree) HANDLER
@@ -772,115 +841,191 @@
     /***************************************
      * SHOP PURCHASE HANDLERS & COST FUNCTIONS
      ***************************************/
-    function getDrillUpgradeCost() { return 5 * (player.drillUpgradeLevel + 1); }
-    function getSizeUpgradeCost() { return player.size === 1 ? 10 : player.size === 2 ? 20 : Infinity; }
-    function getVisionUpgradeCost() { return 15 * (player.visionUpgradeLevel + 1); }
+    function getDrillUpgradeCost() {
+      const level = player.drillUpgradeLevel + 1;
+      const n = level;
+      if (level <= 5) return { Copper: 5 * n };
+      if (level <= 10) return { Copper: 5 * n, Iron: 2 * n };
+      if (level <= 15) return { Copper: 5 * n, Gold: 3 * n, Emerald: n };
+      return { Copper: 5 * n, Diamond: 2 * n, Obsidian: n };
+    }
+
+    function getSizeUpgradeCost() {
+      if (player.size === 1) return { Copper: 50, Iron: 10, Gold: 5 };
+      if (player.size === 2) return { Copper: 200, Diamond: 20, Ruby: 10 };
+      return null;
+    }
+
+    function getVisionUpgradeCost() {
+      const level = player.visionUpgradeLevel + 1;
+      if (level <= 3) return { Copper: 10 * level };
+      if (level <= 6) return { Gold: 15 * level, Emerald: 5 * level };
+      return { Ruby: 10 * level, Diamond: 5 * level };
+    }
+
+    function getDrillSpeedCost() {
+      if (player.drillSpeedLevel === 0) return { Iron: 50 };
+      if (player.drillSpeedLevel === 1) return { Gold: 100 };
+      if (player.drillSpeedLevel === 2) return { Sapphire: 200 };
+      return null;
+    }
+
+    function canAfford(cost) {
+      for (let mineral in cost) {
+        if ((player.materials[mineral] || 0) < cost[mineral]) return false;
+      }
+      return true;
+    }
+
+    function payCost(cost) {
+      for (let mineral in cost) {
+        player.materials[mineral] = (player.materials[mineral] || 0) - cost[mineral];
+      }
+    }
+
+    function costToString(cost) {
+      if (!cost) return "MAX";
+      return Object.entries(cost).map(([mineral, amount]) => `${amount} ${mineral}`).join(", ");
+    }
+
+    let shopSpeedButtonRect = null;
 
     canvas.addEventListener("click", (event) => {
       if (!shopOpen) return;
       const rect = canvas.getBoundingClientRect();
       const mouseX = event.clientX - rect.left;
       const mouseY = event.clientY - rect.top;
-      
+
       if (shopDrillButtonRect &&
           mouseX >= shopDrillButtonRect.x && mouseX <= shopDrillButtonRect.x + shopDrillButtonRect.width &&
           mouseY >= shopDrillButtonRect.y && mouseY <= shopDrillButtonRect.y + shopDrillButtonRect.height) {
         const cost = getDrillUpgradeCost();
-        if ((player.materials["Copper"] || 0) >= cost) {
-          player.materials["Copper"] -= cost;
+        if (canAfford(cost)) {
+          payCost(cost);
           player.drillUpgradeLevel++;
           console.log("Purchased drill upgrade! New drill damage: " + (1 + player.drillUpgradeLevel));
           playSound("purchaseSuccess");
-          displayPurchaseFeedback("Drill upgrade purchased!");
+          displayPurchaseFeedback("Drill power upgraded!");
         } else {
-          console.log("Not enough Copper for drill upgrade!");
+          console.log("Not enough materials for drill upgrade!");
           playSound("purchaseFailure");
-          displayPurchaseFeedback("Not enough Copper!");
+          displayPurchaseFeedback("Not enough materials!");
         }
       }
       if (shopSizeButtonRect &&
           mouseX >= shopSizeButtonRect.x && mouseX <= shopSizeButtonRect.x + shopSizeButtonRect.width &&
           mouseY >= shopSizeButtonRect.y && mouseY <= shopSizeButtonRect.y + shopSizeButtonRect.height) {
         const cost = getSizeUpgradeCost();
-        if ((player.materials["Copper"] || 0) >= cost) {
-          player.materials["Copper"] -= cost;
+        if (cost && canAfford(cost)) {
+          payCost(cost);
           player.size++;
           player.x = spawnCenterX;
           player.y = spawnCenterY;
-          console.log("Purchased size upgrade! New player size: " + player.size + "×" + player.size);
+          console.log("Purchased size upgrade! New player size: " + player.size + "×" + player.size + " (damage penalty applied)");
           playSound("purchaseSuccess");
-          displayPurchaseFeedback("Size upgrade purchased!");
+          displayPurchaseFeedback("Size upgraded!");
         } else {
-          console.log("Not enough Copper for size upgrade!");
+          console.log("Cannot afford size upgrade!");
           playSound("purchaseFailure");
-          displayPurchaseFeedback("Not enough Copper!");
+          displayPurchaseFeedback("Not enough materials!");
         }
       }
       if (shopVisionButtonRect &&
           mouseX >= shopVisionButtonRect.x && mouseX <= shopVisionButtonRect.x + shopVisionButtonRect.width &&
           mouseY >= shopVisionButtonRect.y && mouseY <= shopVisionButtonRect.y + shopVisionButtonRect.height) {
         const cost = getVisionUpgradeCost();
-        if ((player.materials["Copper"] || 0) >= cost) {
-          player.materials["Copper"] -= cost;
+        if (canAfford(cost)) {
+          payCost(cost);
           player.visionUpgradeLevel++;
           updateVision();
           console.log("Purchased vision upgrade! New effective vision radius: " + (VISION_RADIUS + player.visionUpgradeLevel));
           playSound("purchaseSuccess");
-          displayPurchaseFeedback("Vision upgrade purchased!");
+          displayPurchaseFeedback("Vision upgraded!");
         } else {
-          console.log("Not enough Copper for vision upgrade!");
+          console.log("Not enough materials for vision upgrade!");
           playSound("purchaseFailure");
-          displayPurchaseFeedback("Not enough Copper!");
+          displayPurchaseFeedback("Not enough materials!");
+        }
+      }
+      if (shopSpeedButtonRect &&
+          mouseX >= shopSpeedButtonRect.x && mouseX <= shopSpeedButtonRect.x + shopSpeedButtonRect.width &&
+          mouseY >= shopSpeedButtonRect.y && mouseY <= shopSpeedButtonRect.y + shopSpeedButtonRect.height) {
+        const cost = getDrillSpeedCost();
+        if (cost && canAfford(cost)) {
+          payCost(cost);
+          player.drillSpeedLevel++;
+          console.log("Purchased drill speed upgrade! New mining interval: " + getContinuousMoveInterval() + "ms");
+          playSound("purchaseSuccess");
+          displayPurchaseFeedback("Drill speed upgraded!");
+        } else {
+          console.log("Cannot afford drill speed upgrade!");
+          playSound("purchaseFailure");
+          displayPurchaseFeedback("Not enough materials!");
         }
       }
     });
 
     function quickBuyDrill() {
       const cost = getDrillUpgradeCost();
-      if ((player.materials["Copper"] || 0) >= cost) {
-        player.materials["Copper"] -= cost;
+      if (canAfford(cost)) {
+        payCost(cost);
         player.drillUpgradeLevel++;
         console.log("Purchased drill upgrade! New drill damage: " + (1 + player.drillUpgradeLevel));
         playSound("purchaseSuccess");
-        displayPurchaseFeedback("Drill upgrade purchased!");
+        displayPurchaseFeedback("Drill power upgraded!");
       } else {
-        console.log("Not enough Copper for drill upgrade!");
+        console.log("Not enough materials for drill upgrade!");
         playSound("purchaseFailure");
-        displayPurchaseFeedback("Not enough Copper!");
+        displayPurchaseFeedback("Not enough materials!");
       }
     }
 
     function quickBuySize() {
       if (player.size >= 3) return;
       const cost = getSizeUpgradeCost();
-      if ((player.materials["Copper"] || 0) >= cost) {
-        player.materials["Copper"] -= cost;
+      if (cost && canAfford(cost)) {
+        payCost(cost);
         player.size++;
         player.x = spawnCenterX;
         player.y = spawnCenterY;
         console.log("Purchased size upgrade! New player size: " + player.size + "×" + player.size);
         playSound("purchaseSuccess");
-        displayPurchaseFeedback("Size upgrade purchased!");
+        displayPurchaseFeedback("Size upgraded!");
       } else {
-        console.log("Not enough Copper for size upgrade!");
+        console.log("Not enough materials for size upgrade!");
         playSound("purchaseFailure");
-        displayPurchaseFeedback("Not enough Copper!");
+        displayPurchaseFeedback("Not enough materials!");
       }
     }
 
     function quickBuyVision() {
       const cost = getVisionUpgradeCost();
-      if ((player.materials["Copper"] || 0) >= cost) {
-        player.materials["Copper"] -= cost;
+      if (canAfford(cost)) {
+        payCost(cost);
         player.visionUpgradeLevel++;
         updateVision();
         console.log("Purchased vision upgrade! New effective vision radius: " + (VISION_RADIUS + player.visionUpgradeLevel));
         playSound("purchaseSuccess");
-        displayPurchaseFeedback("Vision upgrade purchased!");
+        displayPurchaseFeedback("Vision upgraded!");
       } else {
-        console.log("Not enough Copper for vision upgrade!");
+        console.log("Not enough materials for vision upgrade!");
         playSound("purchaseFailure");
-        displayPurchaseFeedback("Not enough Copper!");
+        displayPurchaseFeedback("Not enough materials!");
+      }
+    }
+
+    function quickBuySpeed() {
+      const cost = getDrillSpeedCost();
+      if (cost && canAfford(cost)) {
+        payCost(cost);
+        player.drillSpeedLevel++;
+        console.log("Purchased drill speed upgrade! New mining interval: " + getContinuousMoveInterval() + "ms");
+        playSound("purchaseSuccess");
+        displayPurchaseFeedback("Drill speed upgraded!");
+      } else {
+        console.log("Cannot afford drill speed upgrade!");
+        playSound("purchaseFailure");
+        displayPurchaseFeedback("Not enough materials!");
       }
     }
 
@@ -889,6 +1034,7 @@
       if (event.key === "1") quickBuyDrill();
       if (event.key === "2") quickBuySize();
       if (event.key === "3") quickBuyVision();
+      if (event.key === "4") quickBuySpeed();
     });
 
     /***************************************
@@ -927,7 +1073,7 @@
      ***************************************/
     function drawShop() {
       if (!shopOpen) return;
-      const shopWidth = 300, shopHeight = 360;
+      const shopWidth = 300, shopHeight = 420;
       const shopPosX = 40, shopPosY = canvas.height - shopHeight - 40;
       ctx.fillStyle = "rgba(50,50,50,0.9)";
       ctx.fillRect(shopPosX, shopPosY, shopWidth, shopHeight);
@@ -936,22 +1082,48 @@
       ctx.fillStyle = "white";
       ctx.font = "22px Arial";
       ctx.textAlign = "center";
-      ctx.fillText("Upgrade Shop", shopPosX + shopWidth / 2, shopPosY + 30);
-      const boxWidth = shopWidth - 40, boxHeight = 60, startX = shopPosX + 20;
+      ctx.fillText("Upgrade Shop (1-4)", shopPosX + shopWidth / 2, shopPosY + 30);
+      const boxWidth = shopWidth - 40, boxHeight = 70, startX = shopPosX + 20;
       let currentY = shopPosY + 50;
+
+      // Drill upgrade
       const drillCost = getDrillUpgradeCost();
-      const canAffordDrill = (player.materials["Copper"] || 0) >= drillCost;
-      drawUpgradeItem(startX, currentY, boxWidth, boxHeight, "power +1", drillCost, canAffordDrill);
+      const canAffordDrill = canAfford(drillCost);
+      shopDrillButtonRect = { x: startX, y: currentY, width: boxWidth, height: boxHeight };
+      drawUpgradeItem(startX, currentY, boxWidth, boxHeight, "Drill Power +1", costToString(drillCost), canAffordDrill);
       currentY += boxHeight + 10;
+
+      // Size upgrade
       if (player.size < 3) {
         const sizeCost = getSizeUpgradeCost();
-        const canAffordSize = (player.materials["Copper"] || 0) >= sizeCost;
-        drawUpgradeItem(startX, currentY, boxWidth, boxHeight, "size +1", sizeCost, canAffordSize);
+        const canAffordSize = canAfford(sizeCost);
+        shopSizeButtonRect = { x: startX, y: currentY, width: boxWidth, height: boxHeight };
+        drawUpgradeItem(startX, currentY, boxWidth, boxHeight, `Size +1 (${player.size}x to ${player.size+1}x)`, costToString(sizeCost), canAffordSize);
         currentY += boxHeight + 10;
+      } else {
+        shopSizeButtonRect = null;
       }
+
+      // Vision upgrade
       const visionCost = getVisionUpgradeCost();
-      const canAffordVision = (player.materials["Copper"] || 0) >= visionCost;
-      drawUpgradeItem(startX, currentY, boxWidth, boxHeight, "vision +1", visionCost, canAffordVision);
+      const canAffordVision = canAfford(visionCost);
+      shopVisionButtonRect = { x: startX, y: currentY, width: boxWidth, height: boxHeight };
+      drawUpgradeItem(startX, currentY, boxWidth, boxHeight, "Vision +1", costToString(visionCost), canAffordVision);
+      currentY += boxHeight + 10;
+
+      // Drill speed upgrade
+      if (player.drillSpeedLevel < 3) {
+        const speedCost = getDrillSpeedCost();
+        const canAffordSpeed = canAfford(speedCost);
+        shopSpeedButtonRect = { x: startX, y: currentY, width: boxWidth, height: boxHeight };
+        const speedLabel = player.drillSpeedLevel === 0 ? "Drill Speed (250→200ms)" :
+                          player.drillSpeedLevel === 1 ? "Drill Speed (200→150ms)" :
+                          "Drill Speed (150→100ms)";
+        drawUpgradeItem(startX, currentY, boxWidth, boxHeight, speedLabel, costToString(speedCost), canAffordSpeed);
+      } else {
+        shopSpeedButtonRect = null;
+      }
+
       ctx.textAlign = "left";
     }
 
@@ -961,10 +1133,11 @@
       ctx.strokeStyle = "white";
       ctx.strokeRect(x, y, width, height);
       ctx.fillStyle = "white";
-      ctx.font = "16px Arial";
+      ctx.font = "14px Arial";
       ctx.textAlign = "center";
-      ctx.fillText(label, x + width / 2, y + height / 2 - 5);
-      ctx.fillText(`Cost: ${cost}`, x + width / 2, y + height / 2 + 15);
+      ctx.fillText(label, x + width / 2, y + height / 2 - 10);
+      ctx.font = "12px Arial";
+      ctx.fillText(`Cost: ${cost}`, x + width / 2, y + height / 2 + 10);
       ctx.textAlign = "left";
     }
 
@@ -1137,6 +1310,13 @@
                   if (oreMapping[lvl].mineral === tile.resource) { baseColor = oreMapping[lvl].color; break; }
                 }
                 if (!baseColor) baseColor = "white";
+
+                // Brighten ore color based on quality
+                if (tile.quality === "perfect") {
+                  baseColor = "gold";
+                } else if (tile.quality === "high") {
+                  // Add glow effect (brighter version)
+                }
               } else if (tile.type === "ground") baseColor = getGroundColorForLevel(currentLevel);
 
               if (!tile.revealed) {
@@ -1156,7 +1336,23 @@
 
               if (tile.visible) {
                 const tileX = tileToPixel(worldX), tileY = tileToPixel(worldY);
-                if (tile.type === "ore") { drawMineralAnimation(tileX, tileY, tileSize, tileSize, tile.animationStartTime); }
+                if (tile.type === "ore") {
+                  drawMineralAnimation(tileX, tileY, tileSize, tileSize, tile.animationStartTime);
+                  // Add quality indicator
+                  if (tile.quality === "perfect") {
+                    ctx.save();
+                    ctx.strokeStyle = "gold";
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(tileX + 2, tileY + 2, tileSize - 4, tileSize - 4);
+                    ctx.restore();
+                  } else if (tile.quality === "high") {
+                    ctx.save();
+                    ctx.strokeStyle = "silver";
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(tileX + 2, tileY + 2, tileSize - 4, tileSize - 4);
+                    ctx.restore();
+                  }
+                }
                 else if (tile.type === "door") { drawDoorAnimation(tileX, tileY, tileSize, tileSize, tile.doorState === "locked"); }
                 if ((tile.type === "ground" || tile.type === "ore") && tile.maxHp > 0) {
                   const hpRatio = tile.hp / tile.maxHp;
@@ -1172,10 +1368,28 @@
       ctx.fillRect(tileToPixel(player.x), tileToPixel(player.y), tileSize * player.size, tileSize * player.size);
       ctx.restore();
       drawDynamicLighting(cameraX, cameraY);
+
+      // Level display
       ctx.font = "24px Arial";
       ctx.fillStyle = "white";
       ctx.textAlign = "center";
       ctx.fillText(`Level ${currentLevel}`, canvas.width / 2, 30);
+
+      // Combo display (top-left)
+      if (player.comboStreak > 0) {
+        ctx.textAlign = "left";
+        ctx.font = "20px Arial";
+        let comboColor = "white";
+        if (player.comboStreak >= 50) comboColor = "gold";
+        else if (player.comboStreak >= 25) comboColor = "orange";
+        else if (player.comboStreak >= 10) comboColor = "yellow";
+        ctx.fillStyle = comboColor;
+        ctx.fillText(`${player.comboStreak}x COMBO!`, 10, 30);
+        ctx.font = "14px Arial";
+        ctx.fillStyle = "white";
+        ctx.fillText(`+${Math.floor((getComboMultiplier() - 1) * 100)}% damage`, 10, 50);
+      }
+
       drawInventory();
       drawShop();
       drawCoordinates();
