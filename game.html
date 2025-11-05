@@ -77,15 +77,14 @@
     const ctx = canvas.getContext("2d");
 
     const tileSize = 32;
-    const gridWidth = 200;
-    const gridHeight = 200;
-
+    const CHUNK_SIZE = 16; // 16x16 tiles per chunk
     const VISION_RADIUS = 5;
+    const MAX_CHUNK_DISTANCE = 32; // Unload chunks further than this from player
 
     const spawnSize = 5;
     const spawnHalf = Math.floor(spawnSize / 2);
-    const spawnCenterX = Math.floor(gridWidth / 2);
-    const spawnCenterY = Math.floor(gridHeight / 2);
+    const spawnCenterX = 0; // Spawn at world origin
+    const spawnCenterY = 0;
     const spawnXStart = spawnCenterX - spawnHalf;
     const spawnXEnd   = spawnCenterX + spawnHalf;
     const spawnYStart = spawnCenterY - spawnHalf;
@@ -95,8 +94,8 @@
     const maxLevel = 10;
     let currentLevel = 1;
 
-    let levels = {};
-    let tiles;
+    // Chunk-based storage: Map of "chunkX_chunkY_level" -> chunk data
+    let chunks = new Map();
     let playerHasLeftPortal = false;
     let inventoryOpen = false;
     let shopOpen = false;
@@ -118,6 +117,82 @@
 
     // Flag to determine if the game has started.
     let gameStarted = false;
+
+    /***************************************
+     * CHUNK MANAGEMENT SYSTEM
+     ***************************************/
+
+    // Convert world coordinates to chunk coordinates
+    function worldToChunk(x, y) {
+      return {
+        chunkX: Math.floor(x / CHUNK_SIZE),
+        chunkY: Math.floor(y / CHUNK_SIZE),
+        localX: ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE,
+        localY: ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE
+      };
+    }
+
+    // Get chunk key for storage
+    function getChunkKey(chunkX, chunkY, level) {
+      return `${chunkX}_${chunkY}_${level}`;
+    }
+
+    // Get or create a chunk
+    function getChunk(chunkX, chunkY, level) {
+      const key = getChunkKey(chunkX, chunkY, level);
+      if (!chunks.has(key)) {
+        chunks.set(key, generateChunk(chunkX, chunkY, level));
+      }
+      return chunks.get(key);
+    }
+
+    // Get tile at world coordinates
+    function getTileAt(x, y, level) {
+      const { chunkX, chunkY, localX, localY } = worldToChunk(x, y);
+      const chunk = getChunk(chunkX, chunkY, level);
+      return chunk.tiles[localY][localX];
+    }
+
+    // Set tile at world coordinates
+    function setTileAt(x, y, level, tileData) {
+      const { chunkX, chunkY, localX, localY } = worldToChunk(x, y);
+      const chunk = getChunk(chunkX, chunkY, level);
+      chunk.tiles[localY][localX] = tileData;
+    }
+
+    // Unload chunks far from player
+    function unloadDistantChunks() {
+      const playerChunk = worldToChunk(player.x, player.y);
+      const toDelete = [];
+
+      for (let key of chunks.keys()) {
+        const [chunkX, chunkY, level] = key.split('_').map(Number);
+        if (level !== currentLevel) continue;
+
+        const dx = Math.abs(chunkX - playerChunk.chunkX);
+        const dy = Math.abs(chunkY - playerChunk.chunkY);
+
+        if (dx > MAX_CHUNK_DISTANCE || dy > MAX_CHUNK_DISTANCE) {
+          toDelete.push(key);
+        }
+      }
+
+      toDelete.forEach(key => chunks.delete(key));
+    }
+
+    // Load chunks in viewport
+    function loadVisibleChunks(cameraX, cameraY) {
+      const startChunkX = Math.floor(cameraX / (CHUNK_SIZE * tileSize));
+      const endChunkX = Math.ceil((cameraX + canvas.width) / (CHUNK_SIZE * tileSize));
+      const startChunkY = Math.floor(cameraY / (CHUNK_SIZE * tileSize));
+      const endChunkY = Math.ceil((cameraY + canvas.height) / (CHUNK_SIZE * tileSize));
+
+      for (let cy = startChunkY; cy <= endChunkY; cy++) {
+        for (let cx = startChunkX; cx <= endChunkX; cx++) {
+          getChunk(cx, cy, currentLevel);
+        }
+      }
+    }
 
     /***************************************
      * AUDIO SETUP
@@ -268,14 +343,55 @@
     }
 
     /***************************************
-     * LEVEL GENERATION & DOOR PLACEMENT
+     * CHUNK GENERATION & DOOR PLACEMENT
      ***************************************/
-    function generateLevel(level) {
-      let grid = Array.from({ length: gridHeight }, (_, row) =>
-        Array.from({ length: gridWidth }, (_, col) => {
-          let tile = { revealed: false, visible: false, beingMined: false, animationStartTime: 0 };
-          if (col < spawnXStart || col > spawnXEnd || row < spawnYStart || row > spawnYEnd) {
-            if (Math.random() < oreChance) {
+
+    // Seeded random for consistent chunk generation
+    function seededRandom(chunkX, chunkY, level, localX, localY) {
+      const seed = (chunkX * 73856093) ^ (chunkY * 19349663) ^ (level * 83492791) ^ (localX * 7919) ^ (localY * 6971);
+      const x = Math.sin(seed) * 10000;
+      return x - Math.floor(x);
+    }
+
+    function generateChunk(chunkX, chunkY, level) {
+      let tiles = Array.from({ length: CHUNK_SIZE }, () =>
+        Array.from({ length: CHUNK_SIZE }, () => ({ }))
+      );
+
+      for (let localY = 0; localY < CHUNK_SIZE; localY++) {
+        for (let localX = 0; localX < CHUNK_SIZE; localX++) {
+          const worldX = chunkX * CHUNK_SIZE + localX;
+          const worldY = chunkY * CHUNK_SIZE + localY;
+
+          let tile = {
+            revealed: false,
+            visible: false,
+            beingMined: false,
+            animationStartTime: 0
+          };
+
+          // Check if in spawn area
+          const inSpawn = (worldX >= spawnXStart && worldX <= spawnXEnd &&
+                          worldY >= spawnYStart && worldY <= spawnYEnd);
+
+          if (inSpawn) {
+            tile.type = "mined";
+            tile.hp = 0;
+            tile.maxHp = 0;
+            tile.revealed = true;
+            tile.visible = true;
+            tile.resource = null;
+
+            // Place prev door at spawn center
+            if (level > 1 && worldX === spawnCenterX && worldY === spawnCenterY) {
+              tile.type = "door";
+              tile.doorFor = "prev";
+              tile.doorState = "open";
+            }
+          } else {
+            const random = seededRandom(chunkX, chunkY, level, localX, localY);
+
+            if (random < oreChance) {
               tile.type = "ore";
               tile.resource = oreMapping[level].mineral;
               tile.hp = oreMapping[level].baseHP;
@@ -285,74 +401,48 @@
               tile.hp = levelHpScaling[level];
               tile.maxHp = tile.hp;
             }
-          } else {
-            tile.type = "mined";
-            tile.hp = 0;
-            tile.maxHp = 0;
-            tile.revealed = true;
-            tile.visible = true;
-          }
-          return tile;
-        })
-      );
-      
-      for (let y = spawnYStart; y <= spawnYEnd; y++) {
-        for (let x = spawnXStart; x <= spawnXEnd; x++) {
-          grid[y][x] = { type: "mined", hp: 0, maxHp: 0, revealed: true, visible: true, resource: null };
-        }
-      }
-      
-      if (level > 1) {
-        grid[spawnCenterY][spawnCenterX] = {
-          type: "door", doorFor: "prev", doorState: "open",
-          hp: 0, maxHp: 0, revealed: true, visible: true, resource: null
-        };
-      }
-      
-      // New door placement code: Limit door spawn within 20 tiles from the spawn.
-      let doorRange = 20;
-      let possibleCoords = [];
-      let minDoorX = Math.max(0, spawnCenterX - doorRange);
-      let maxDoorX = Math.min(gridWidth - 1, spawnCenterX + doorRange);
-      let minDoorY = Math.max(0, spawnCenterY - doorRange);
-      let maxDoorY = Math.min(gridHeight - 1, spawnCenterY + doorRange);
 
-      for (let row = minDoorY; row <= maxDoorY; row++) {
-        for (let col = minDoorX; col <= maxDoorX; col++) {
-          if ((col < spawnXStart || col > spawnXEnd || row < spawnYStart || row > spawnYEnd) &&
-              grid[row][col].type !== "door") {
-            possibleCoords.push({ x: col, y: row });
+            // Reveal tiles around spawn
+            const inSpawnReveal = (worldX >= spawnXStart - 1 && worldX <= spawnXEnd + 1 &&
+                                  worldY >= spawnYStart - 1 && worldY <= spawnYEnd + 1);
+            if (inSpawnReveal) {
+              tile.revealed = true;
+              tile.visible = true;
+            }
           }
+
+          // Place next door in a specific location (deterministic)
+          const doorRange = 20;
+          if (worldX === spawnCenterX + doorRange && worldY === spawnCenterY + doorRange) {
+            tile.type = "door";
+            tile.doorFor = "next";
+            tile.doorState = "locked";
+            tile.hp = 50 + level * 20;
+            tile.maxHp = 50 + level * 20;
+            tile.revealed = false;
+            tile.visible = false;
+            tile.resource = null;
+          }
+
+          tiles[localY][localX] = tile;
         }
       }
 
-      if (possibleCoords.length > 0) {
-        let randIndex = Math.floor(Math.random() * possibleCoords.length);
-        let coord = possibleCoords[randIndex];
-        grid[coord.y][coord.x] = {
-          type: "door", doorFor: "next", doorState: "locked",
-          hp: 50 + level * 20, maxHp: 50 + level * 20,
-          revealed: false, visible: false, resource: null
-        };
-      }
-      
-      let spawn = { x: spawnCenterX, y: spawnCenterY };
-      for (let y = spawnYStart - 1; y <= spawnYEnd + 1; y++) {
-        for (let x = spawnXStart - 1; x <= spawnXEnd + 1; x++) {
-          if (x >= 0 && x < gridWidth && y >= 0 && y < gridHeight) {
-            grid[y][x].revealed = true;
-            grid[y][x].visible = true;
-          }
-        }
-      }
-      return { grid, spawn };
+      return { tiles };
     }
 
-    levels[1] = generateLevel(1);
-    tiles = levels[1].grid;
-    player.x = levels[1].spawn.x;
-    player.y = levels[1].spawn.y;
+    // Initialize player position
+    player.x = spawnCenterX;
+    player.y = spawnCenterY;
     playerHasLeftPortal = false;
+
+    // Pre-generate spawn chunks
+    const spawnChunk = worldToChunk(spawnCenterX, spawnCenterY);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        getChunk(spawnChunk.chunkX + dx, spawnChunk.chunkY + dy, currentLevel);
+      }
+    }
 
     /***************************************
      * VISION SYSTEM (Fog of War)
@@ -360,36 +450,70 @@
     function updateVision() {
       const visionRange = player.visionUpgradeLevel + 1;
       if (!portalLocations[currentLevel]) { portalLocations[currentLevel] = {}; }
-      for (let row = 0; row < gridHeight; row++) {
-        for (let col = 0; col < gridWidth; col++) { tiles[row][col].visible = false; }
-      }
-      for (let row = 0; row < gridHeight; row++) {
-        for (let col = 0; col < gridWidth; col++) {
-          if (tiles[row][col].type === "mined") {
-            revealSurroundingTiles(col, row, visionRange);
+
+      // First pass: Reset visibility for loaded chunks
+      for (let [key, chunk] of chunks) {
+        const [chunkX, chunkY, level] = key.split('_').map(Number);
+        if (level !== currentLevel) continue;
+
+        for (let localY = 0; localY < CHUNK_SIZE; localY++) {
+          for (let localX = 0; localX < CHUNK_SIZE; localX++) {
+            chunk.tiles[localY][localX].visible = false;
           }
         }
       }
-      for (let row = 0; row < gridHeight; row++) {
-        for (let col = 0; col < gridWidth; col++) {
-          if (tiles[row][col].visible && tiles[row][col].type === "door") {
-            if (tiles[row][col].doorFor === "next") {
-              portalLocations[currentLevel].next = { x: col, y: row };
-            } else if (tiles[row][col].doorFor === "prev") {
-              portalLocations[currentLevel].prev = { x: col, y: row };
+
+      // Second pass: Reveal from mined tiles
+      for (let [key, chunk] of chunks) {
+        const [chunkX, chunkY, level] = key.split('_').map(Number);
+        if (level !== currentLevel) continue;
+
+        for (let localY = 0; localY < CHUNK_SIZE; localY++) {
+          for (let localX = 0; localX < CHUNK_SIZE; localX++) {
+            const tile = chunk.tiles[localY][localX];
+            if (tile.type === "mined") {
+              const worldX = chunkX * CHUNK_SIZE + localX;
+              const worldY = chunkY * CHUNK_SIZE + localY;
+              revealSurroundingTiles(worldX, worldY, visionRange);
+            }
+          }
+        }
+      }
+
+      // Third pass: Update portal locations
+      for (let [key, chunk] of chunks) {
+        const [chunkX, chunkY, level] = key.split('_').map(Number);
+        if (level !== currentLevel) continue;
+
+        for (let localY = 0; localY < CHUNK_SIZE; localY++) {
+          for (let localX = 0; localX < CHUNK_SIZE; localX++) {
+            const tile = chunk.tiles[localY][localX];
+            if (tile.visible && tile.type === "door") {
+              const worldX = chunkX * CHUNK_SIZE + localX;
+              const worldY = chunkY * CHUNK_SIZE + localY;
+
+              if (tile.doorFor === "next") {
+                portalLocations[currentLevel].next = { x: worldX, y: worldY };
+              } else if (tile.doorFor === "prev") {
+                portalLocations[currentLevel].prev = { x: worldX, y: worldY };
+              }
             }
           }
         }
       }
     }
+
     function revealSurroundingTiles(centerX, centerY, range) {
       for (let dy = -range; dy <= range; dy++) {
         for (let dx = -range; dx <= range; dx++) {
-          const x = centerX + dx, y = centerY + dy;
-          if (x >= 0 && x < gridWidth && y >= 0 && y < gridHeight) {
-            tiles[y][x].visible = true;
-            tiles[y][x].revealed = true;
-          }
+          const x = centerX + dx;
+          const y = centerY + dy;
+
+          const { chunkX, chunkY, localX, localY } = worldToChunk(x, y);
+          const chunk = getChunk(chunkX, chunkY, currentLevel);
+
+          chunk.tiles[localY][localX].visible = true;
+          chunk.tiles[localY][localX].revealed = true;
         }
       }
     }
@@ -415,13 +539,23 @@
      ***************************************/
     function transitionToLevel(newLevel) {
       if (newLevel < 1) return;
-      if (newLevel > maxLevel) { alert("Congratulations! You have completed the game!"); return; }
+      if (newLevel > maxLevel) {
+        alert("Congratulations! You have completed the game!");
+        return;
+      }
       currentLevel = newLevel;
-      if (!levels[newLevel]) { levels[newLevel] = generateLevel(newLevel); }
-      tiles = levels[newLevel].grid;
       player.x = spawnCenterX;
       player.y = spawnCenterY;
       playerHasLeftPortal = false;
+
+      // Pre-generate spawn chunks for new level
+      const spawnChunk = worldToChunk(spawnCenterX, spawnCenterY);
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          getChunk(spawnChunk.chunkX + dx, spawnChunk.chunkY + dy, currentLevel);
+        }
+      }
+
       console.log(`Transitioned to Level ${newLevel}`);
       playSound("levelTransition");
     }
@@ -447,17 +581,12 @@
 
     function tryMove(dx, dy) {
       let newX = player.x + dx, newY = player.y + dy;
-      for (let i = 0; i < player.size; i++) {
-        for (let j = 0; j < player.size; j++) {
-          let tx = newX + i, ty = newY + j;
-          if (tx < 0 || tx >= gridWidth || ty < 0 || ty >= gridHeight) return;
-        }
-      }
-      
+
+      // Check passability
       let fullyPassable = true;
       for (let i = 0; i < player.size; i++) {
         for (let j = 0; j < player.size; j++) {
-          let tile = tiles[newY + j][newX + i];
+          let tile = getTileAt(newX + i, newY + j, currentLevel);
           if (tile.type !== "mined" && !(tile.type === "door" && tile.doorFor === "prev")) {
             fullyPassable = false;
             break;
@@ -465,12 +594,12 @@
         }
         if (!fullyPassable) break;
       }
-      
+
       if (fullyPassable) {
         let steppedOnPortal = false;
         for (let i = 0; i < player.size; i++) {
           for (let j = 0; j < player.size; j++) {
-            let tile = tiles[newY + j][newX + i];
+            let tile = getTileAt(newX + i, newY + j, currentLevel);
             if (tile.type === "door" && tile.doorFor === "prev") steppedOnPortal = true;
           }
         }
@@ -484,17 +613,17 @@
         return;
       } else {
         if (pendingSkillUpgrade) return;
-        
+
         const drillDamage = 1 + player.drillUpgradeLevel;
         for (let i = 0; i < player.size; i++) {
           for (let j = 0; j < player.size; j++) {
-            let tile = tiles[newY + j][newX + i];
+            let tile = getTileAt(newX + i, newY + j, currentLevel);
             if (!tile.beingMined) {
               tile.beingMined = true;
               tile.animationStartTime = Date.now();
             }
             tile.beingMined = true;
-            
+
             if (tile.type === "door") {
               if (tile.doorFor === "next") {
                 if (tile.doorState === "locked") {
@@ -967,51 +1096,78 @@
       let playerCenterY = tileToPixel(player.y + player.size/2);
       let cameraX = playerCenterX - canvas.width / 2;
       let cameraY = playerCenterY - canvas.height / 2;
-      let levelWidth = gridWidth * tileSize, levelHeight = gridHeight * tileSize;
-      cameraX = Math.max(0, Math.min(cameraX, levelWidth - canvas.width));
-      cameraY = Math.max(0, Math.min(cameraY, levelHeight - canvas.height));
-      
+
+      // Load visible chunks
+      loadVisibleChunks(cameraX, cameraY);
+
+      // Periodically unload distant chunks
+      if (Math.random() < 0.01) { // 1% chance per frame
+        unloadDistantChunks();
+      }
+
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
       ctx.translate(-cameraX, -cameraY);
-      for (let row = 0; row < gridHeight; row++) {
-        for (let col = 0; col < gridWidth; col++) {
-          const tile = tiles[row][col];
-          let baseColor = "black";
-          if (tile.type === "mined") baseColor = "gray";
-          else if (tile.type === "door") {
-            if (tile.doorFor === "next") baseColor = (tile.doorState === "locked") ? "darkred" : "gold";
-            else if (tile.doorFor === "prev") baseColor = "cyan";
-          } else if (tile.type === "ore") {
-            for (let lvl = 1; lvl <= maxLevel; lvl++) {
-              if (oreMapping[lvl].mineral === tile.resource) { baseColor = oreMapping[lvl].color; break; }
-            }
-            if (!baseColor) baseColor = "white";
-          } else if (tile.type === "ground") baseColor = getGroundColorForLevel(currentLevel);
-          
-          if (!tile.revealed) { ctx.fillStyle = "black"; ctx.fillRect(tileToPixel(col), tileToPixel(row), tileSize, tileSize); }
-          else {
-            ctx.fillStyle = baseColor;
-            ctx.fillRect(tileToPixel(col), tileToPixel(row), tileSize, tileSize);
-            if (!tile.visible) { ctx.fillStyle = "rgba(0, 0, 0, 0.5)"; ctx.fillRect(tileToPixel(col), tileToPixel(row), tileSize, tileSize); }
-          }
-          
-          ctx.strokeStyle = "#333";
-          ctx.strokeRect(tileToPixel(col), tileToPixel(row), tileSize, tileSize);
-          
-          if (tile.visible) {
-            const tileX = tileToPixel(col), tileY = tileToPixel(row);
-            if (tile.type === "ore") { drawMineralAnimation(tileX, tileY, tileSize, tileSize, tile.animationStartTime); }
-            else if (tile.type === "door") { drawDoorAnimation(tileX, tileY, tileSize, tileSize, tile.doorState === "locked"); }
-            if ((tile.type === "ground" || tile.type === "ore") && tile.maxHp > 0) {
-              const hpRatio = tile.hp / tile.maxHp;
-              drawCracks(tileX, tileY, tileSize, tileSize, hpRatio);
+
+      // Calculate visible chunk range
+      const startChunkX = Math.floor(cameraX / (CHUNK_SIZE * tileSize));
+      const endChunkX = Math.ceil((cameraX + canvas.width) / (CHUNK_SIZE * tileSize));
+      const startChunkY = Math.floor(cameraY / (CHUNK_SIZE * tileSize));
+      const endChunkY = Math.ceil((cameraY + canvas.height) / (CHUNK_SIZE * tileSize));
+
+      // Only render visible chunks
+      for (let chunkY = startChunkY; chunkY <= endChunkY; chunkY++) {
+        for (let chunkX = startChunkX; chunkX <= endChunkX; chunkX++) {
+          const chunk = getChunk(chunkX, chunkY, currentLevel);
+
+          for (let localY = 0; localY < CHUNK_SIZE; localY++) {
+            for (let localX = 0; localX < CHUNK_SIZE; localX++) {
+              const tile = chunk.tiles[localY][localX];
+              const worldX = chunkX * CHUNK_SIZE + localX;
+              const worldY = chunkY * CHUNK_SIZE + localY;
+
+              let baseColor = "black";
+              if (tile.type === "mined") baseColor = "gray";
+              else if (tile.type === "door") {
+                if (tile.doorFor === "next") baseColor = (tile.doorState === "locked") ? "darkred" : "gold";
+                else if (tile.doorFor === "prev") baseColor = "cyan";
+              } else if (tile.type === "ore") {
+                for (let lvl = 1; lvl <= maxLevel; lvl++) {
+                  if (oreMapping[lvl].mineral === tile.resource) { baseColor = oreMapping[lvl].color; break; }
+                }
+                if (!baseColor) baseColor = "white";
+              } else if (tile.type === "ground") baseColor = getGroundColorForLevel(currentLevel);
+
+              if (!tile.revealed) {
+                ctx.fillStyle = "black";
+                ctx.fillRect(tileToPixel(worldX), tileToPixel(worldY), tileSize, tileSize);
+              } else {
+                ctx.fillStyle = baseColor;
+                ctx.fillRect(tileToPixel(worldX), tileToPixel(worldY), tileSize, tileSize);
+                if (!tile.visible) {
+                  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+                  ctx.fillRect(tileToPixel(worldX), tileToPixel(worldY), tileSize, tileSize);
+                }
+              }
+
+              ctx.strokeStyle = "#333";
+              ctx.strokeRect(tileToPixel(worldX), tileToPixel(worldY), tileSize, tileSize);
+
+              if (tile.visible) {
+                const tileX = tileToPixel(worldX), tileY = tileToPixel(worldY);
+                if (tile.type === "ore") { drawMineralAnimation(tileX, tileY, tileSize, tileSize, tile.animationStartTime); }
+                else if (tile.type === "door") { drawDoorAnimation(tileX, tileY, tileSize, tileSize, tile.doorState === "locked"); }
+                if ((tile.type === "ground" || tile.type === "ore") && tile.maxHp > 0) {
+                  const hpRatio = tile.hp / tile.maxHp;
+                  drawCracks(tileX, tileY, tileSize, tileSize, hpRatio);
+                }
+              }
             }
           }
         }
       }
-      
+
       ctx.fillStyle = "white";
       ctx.fillRect(tileToPixel(player.x), tileToPixel(player.y), tileSize * player.size, tileSize * player.size);
       ctx.restore();
@@ -1051,11 +1207,16 @@
     }
 
     function resetMiningState() {
-      for (let row = 0; row < gridHeight; row++) {
-        for (let col = 0; col < gridWidth; col++) {
-          if (tiles[row][col].beingMined) {
-            tiles[row][col].beingMined = false;
-            tiles[row][col].animationStartTime = Date.now();
+      for (let [key, chunk] of chunks) {
+        const [chunkX, chunkY, level] = key.split('_').map(Number);
+        if (level !== currentLevel) continue;
+
+        for (let localY = 0; localY < CHUNK_SIZE; localY++) {
+          for (let localX = 0; localX < CHUNK_SIZE; localX++) {
+            if (chunk.tiles[localY][localX].beingMined) {
+              chunk.tiles[localY][localX].beingMined = false;
+              chunk.tiles[localY][localX].animationStartTime = Date.now();
+            }
           }
         }
       }
