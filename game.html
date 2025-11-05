@@ -95,6 +95,7 @@
 
     // Chunk-based storage: Map of "chunkX_chunkY_level" -> chunk data
     let chunks = new Map();
+    let doorStates = {}; // Track door states per level: { level: { locked: bool } }
     let playerHasLeftPortal = false;
     let inventoryOpen = false;
     let shopOpen = false;
@@ -390,6 +391,8 @@
               tile.type = "door";
               tile.doorFor = "prev";
               tile.doorState = "open";
+              tile.hp = 0;
+              tile.maxHp = 0;
             }
           } else {
             const random = seededRandom(chunkX, chunkY, level, localX, localY);
@@ -428,13 +431,18 @@
             }
           }
 
-          // Place next door in a specific location (deterministic)
+          // Place next door in a specific location (deterministic but varied per level)
           const doorRange = 20;
-          if (worldX === spawnCenterX + doorRange && worldY === spawnCenterY + doorRange) {
+          // Use level-based offset for variety (each level has different door position)
+          const doorOffsetX = doorRange + (level * 3) % 10;
+          const doorOffsetY = doorRange + (level * 7) % 10;
+          if (worldX === spawnCenterX + doorOffsetX && worldY === spawnCenterY + doorOffsetY) {
             tile.type = "door";
             tile.doorFor = "next";
-            tile.doorState = "locked";
-            tile.hp = 50 + level * 20;
+            // Check if door was previously unlocked
+            if (!doorStates[level]) doorStates[level] = { nextDoorLocked: true };
+            tile.doorState = doorStates[level].nextDoorLocked ? "locked" : "open";
+            tile.hp = doorStates[level].nextDoorLocked ? (50 + level * 20) : 0;
             tile.maxHp = 50 + level * 20;
             tile.revealed = false;
             tile.visible = false;
@@ -452,6 +460,11 @@
     player.x = spawnCenterX;
     player.y = spawnCenterY;
     playerHasLeftPortal = false;
+
+    // Initialize door states for all levels
+    for (let level = 1; level <= maxLevel; level++) {
+      doorStates[level] = { nextDoorLocked: true };
+    }
 
     // Pre-generate spawn chunks
     const spawnChunk = worldToChunk(spawnCenterX, spawnCenterY);
@@ -560,10 +573,28 @@
         alert("Congratulations! You have completed the game!");
         return;
       }
+
+      // Save current level state
+      const previousLevel = currentLevel;
+
+      // Transition to new level
       currentLevel = newLevel;
       player.x = spawnCenterX;
       player.y = spawnCenterY;
       playerHasLeftPortal = false;
+
+      // Break combo on level transition
+      player.comboStreak = 0;
+      player.lastMineTime = 0;
+
+      // Close shop and inventory
+      shopOpen = false;
+      inventoryOpen = false;
+
+      // Initialize door state for this level if not exists
+      if (!doorStates[newLevel]) {
+        doorStates[newLevel] = { nextDoorLocked: true };
+      }
 
       // Pre-generate spawn chunks for new level
       const spawnChunk = worldToChunk(spawnCenterX, spawnCenterY);
@@ -573,7 +604,13 @@
         }
       }
 
-      console.log(`Transitioned to Level ${newLevel}`);
+      // Force vision update to reveal spawn area
+      updateVision();
+
+      // Display level transition message
+      displayLevelTransition(newLevel);
+
+      console.log(`Transitioned from Level ${previousLevel} to Level ${newLevel}`);
       playSound("levelTransition");
     }
 
@@ -690,6 +727,9 @@
                   if (tile.hp <= 0) {
                     tile.hp = 0;
                     tile.doorState = "open";
+                    // Save door state persistently
+                    if (!doorStates[currentLevel]) doorStates[currentLevel] = {};
+                    doorStates[currentLevel].nextDoorLocked = false;
                     console.log("Next door is now open!");
                     playSound("doorOpen");
                   }
@@ -1417,6 +1457,21 @@
         ctx.fillText(feedbackText, canvas.width / 2, canvas.height - 50);
         feedbackTimer--;
       }
+
+      // Level transition display (center screen, large text)
+      if (levelTransitionTimer > 0) {
+        ctx.save();
+        ctx.font = "72px Arial";
+        ctx.fillStyle = "white";
+        ctx.strokeStyle = "black";
+        ctx.lineWidth = 4;
+        ctx.textAlign = "center";
+        ctx.strokeText(levelTransitionText, canvas.width / 2, canvas.height / 2);
+        ctx.fillText(levelTransitionText, canvas.width / 2, canvas.height / 2);
+        ctx.restore();
+        levelTransitionTimer--;
+      }
+
       requestAnimationFrame(render);
     }
 
@@ -1441,6 +1496,13 @@
     function displayPurchaseFeedback(text) {
       feedbackText = text;
       feedbackTimer = 200;
+    }
+
+    let levelTransitionText = "";
+    let levelTransitionTimer = 0;
+    function displayLevelTransition(level) {
+      levelTransitionText = `LEVEL ${level}`;
+      levelTransitionTimer = 180; // 3 seconds at 60fps
     }
 
     /***************************************
