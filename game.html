@@ -99,9 +99,12 @@
     let playerHasLeftPortal = false;
     let inventoryOpen = false;
     let shopOpen = false;
+    let skillTreeOpen = false;
     let shopDrillButtonRect = null;
     let shopSizeButtonRect = null;
     let shopVisionButtonRect = null;
+    let shopSpeedButtonRect = null;
+    let skillTreeButtonRect = null;
 
     let player = {
       x: 0,
@@ -309,7 +312,6 @@
       tier3: { power: "+200% damage (3× total)", yield: "+100% yield (2× total)" },
       tier4: { power: "+400% damage (5× total) + pierce", yield: "+150% yield (2.5× total)" }
     };
-    let pendingSkillUpgrade = null;
 
     /***************************************
      * MAPPING & SCALING DATA
@@ -551,17 +553,38 @@
     /***************************************
      * SKILL UPGRADE HANDLING
      ***************************************/
-    function checkForUpgrade(mineral) {
+
+    // Get count of available upgrades across all minerals
+    function getAvailableUpgradesCount() {
+      let count = 0;
+      mineralList.forEach(mineral => {
+        let skill = mineralSkillTrees[mineral];
+        for (let tier of ["tier1", "tier2", "tier3", "tier4"]) {
+          if (!skill.upgrades[tier] && skill.xp >= upgradeThresholds[tier]) {
+            count++;
+            break; // Only count first available per mineral
+          }
+        }
+      });
+      return count;
+    }
+
+    // Get first available tier for a mineral
+    function getAvailableTier(mineral) {
       let skill = mineralSkillTrees[mineral];
-      if (pendingSkillUpgrade && pendingSkillUpgrade.mineral === mineral) return;
       for (let tier of ["tier1", "tier2", "tier3", "tier4"]) {
         if (!skill.upgrades[tier] && skill.xp >= upgradeThresholds[tier]) {
-          pendingSkillUpgrade = { mineral, tier };
-          console.log(`Upgrade available for ${mineral} ${tier.toUpperCase()}! Choose: P for ${skillUpgradeOptions[tier].power} OR Y for ${skillUpgradeOptions[tier].yield}`);
-          playSound("skillUpgrade");
-          break;
+          return tier;
         }
       }
+      return null;
+    }
+
+    // Apply skill upgrade
+    function applySkillUpgrade(mineral, tier, choice) {
+      mineralSkillTrees[mineral].upgrades[tier] = choice;
+      console.log(`Upgraded ${mineral} ${tier}: ${choice}`);
+      playSound("skillUpgradeConfirmation");
     }
 
     /***************************************
@@ -587,9 +610,10 @@
       player.comboStreak = 0;
       player.lastMineTime = 0;
 
-      // Close shop and inventory
+      // Close shop, inventory, and skill tree
       shopOpen = false;
       inventoryOpen = false;
+      skillTreeOpen = false;
 
       // Initialize door state for this level if not exists
       if (!doorStates[newLevel]) {
@@ -693,7 +717,6 @@
         if (steppedOnPortal && playerHasLeftPortal) { transitionToLevel(currentLevel - 1); return; }
         return;
       } else {
-        if (pendingSkillUpgrade) return;
 
         // Update combo
         updateCombo();
@@ -774,7 +797,7 @@
                   if (isOre) {
                     let mineral = tile.resource;
                     let skill = mineralSkillTrees[mineral];
-                    if (skill) { skill.xp += 1; checkForUpgrade(mineral); }
+                    if (skill) { skill.xp += 1; }
 
                     // New yield path: percentage multipliers
                     let yieldMultiplier = 1.0;
@@ -804,7 +827,6 @@
     }
 
     document.addEventListener("keydown", (event) => {
-      if (pendingSkillUpgrade) return;
       const direction = getDirectionFromKey(event.key);
       if (!direction) return;
       const currentTime = Date.now();
@@ -833,7 +855,6 @@
 
     setInterval(() => {
       if (!isMoving || !currentDirection) return;
-      if (pendingSkillUpgrade) return;
       const currentTime = Date.now();
       const moveInterval = getContinuousMoveInterval();
       if (currentTime - lastDamageTimes[currentDirection] < moveInterval) return;
@@ -848,32 +869,23 @@
     }, 50);
 
     /***************************************
-     * UPGRADE SELECTION (Skill Tree) HANDLER
+     * INVENTORY, SHOP & SKILL TREE TOGGLING
      ***************************************/
     document.addEventListener("keydown", (event) => {
-      if (pendingSkillUpgrade) {
-        if (event.key.toLowerCase() === "p") {
-          mineralSkillTrees[pendingSkillUpgrade.mineral].upgrades[pendingSkillUpgrade.tier] = "power";
-          console.log(`Upgrade chosen for ${pendingSkillUpgrade.mineral} ${pendingSkillUpgrade.tier}: POWER`);
-          playSound("skillUpgradeConfirmation");
-          pendingSkillUpgrade = null;
-        } else if (event.key.toLowerCase() === "y") {
-          mineralSkillTrees[pendingSkillUpgrade.mineral].upgrades[pendingSkillUpgrade.tier] = "yield";
-          console.log(`Upgrade chosen for ${pendingSkillUpgrade.mineral} ${pendingSkillUpgrade.tier}: YIELD`);
-          playSound("skillUpgradeConfirmation");
-          pendingSkillUpgrade = null;
-        }
-      }
-    });
-
-    /***************************************
-     * INVENTORY & SHOP TOGGLING
-     ***************************************/
-    document.addEventListener("keydown", (event) => {
-      if (pendingSkillUpgrade) return;
       if (event.key.toLowerCase() === "s") {
         inventoryOpen = !inventoryOpen;
         shopOpen = !shopOpen;
+        if (inventoryOpen || shopOpen) {
+          skillTreeOpen = false; // Close skill tree when opening shop
+        }
+        playSound("inventoryToggle");
+      }
+      if (event.key.toLowerCase() === "t") {
+        skillTreeOpen = !skillTreeOpen;
+        if (skillTreeOpen) {
+          inventoryOpen = false; // Close others when opening skill tree
+          shopOpen = false;
+        }
         playSound("inventoryToggle");
       }
     });
@@ -1070,7 +1082,6 @@
     }
 
     document.addEventListener("keydown", (event) => {
-      if (pendingSkillUpgrade) return;
       if (event.key === "1") quickBuyDrill();
       if (event.key === "2") quickBuySize();
       if (event.key === "3") quickBuyVision();
@@ -1196,6 +1207,330 @@
       ctx.fillStyle = "white";
       ctx.font = "14px Arial";
       ctx.fillText(text, x + width / 4, y + height / 1.5);
+    }
+
+    /***************************************
+     * DRAW SKILL TREE FUNCTION
+     ***************************************/
+    function drawSkillTree() {
+      if (!skillTreeOpen) return;
+
+      // Full screen overlay
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = "rgba(0, 0, 0, 0.92)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Title
+      ctx.fillStyle = "white";
+      ctx.font = "32px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("SKILL TREE (Press T to close)", canvas.width / 2, 40);
+
+      // Draw mineral rows
+      const startY = 80;
+      const rowHeight = 60;
+      const mineralColors = {
+        "Copper": "#B87333", "Iron": "#808080", "Gold": "#FFD700", "Emerald": "#50C878",
+        "Sapphire": "#0F52BA", "Ruby": "#E0115F", "Diamond": "#B9F2FF", "Amethyst": "#9966CC",
+        "Topaz": "#FFC87C", "Obsidian": "#1C1C1C"
+      };
+
+      const tiers = ["tier1", "tier2", "tier3", "tier4"];
+      const tierX = [420, 560, 700, 840]; // X positions for tier buttons
+
+      mineralList.forEach((mineral, index) => {
+        const y = startY + index * rowHeight;
+        const skill = mineralSkillTrees[mineral];
+        const availableTier = getAvailableTier(mineral);
+
+        // Mineral name and color
+        ctx.fillStyle = mineralColors[mineral];
+        ctx.font = "18px Arial";
+        ctx.textAlign = "left";
+        ctx.fillText(mineral, 50, y + 30);
+
+        // XP Progress bar
+        const barX = 180;
+        const barWidth = 200;
+        const barHeight = 20;
+        const maxXP = 500; // Tier 4 threshold
+        const xpPercent = Math.min(skill.xp / maxXP, 1);
+
+        ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
+        ctx.fillRect(barX, y + 15, barWidth, barHeight);
+        ctx.fillStyle = mineralColors[mineral];
+        ctx.fillRect(barX, y + 15, barWidth * xpPercent, barHeight);
+        ctx.strokeStyle = "white";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(barX, y + 15, barWidth, barHeight);
+
+        // XP Text
+        ctx.fillStyle = "white";
+        ctx.font = "12px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(`${skill.xp} XP`, barX + barWidth / 2, y + 29);
+
+        // Tier buttons
+        tiers.forEach((tier, tierIndex) => {
+          const tierThreshold = upgradeThresholds[tier];
+          const isUnlocked = skill.upgrades[tier] !== null;
+          const isAvailable = !isUnlocked && skill.xp >= tierThreshold;
+          const isLocked = skill.xp < tierThreshold;
+
+          const buttonX = tierX[tierIndex];
+          const buttonY = y + 10;
+          const buttonW = 100;
+          const buttonH = 40;
+
+          // Button background
+          if (isUnlocked) {
+            ctx.fillStyle = skill.upgrades[tier] === "power" ? "#4a9eff" : "#ff9a4a";
+          } else if (isAvailable) {
+            ctx.fillStyle = "#44ff44";
+          } else {
+            ctx.fillStyle = "#444";
+          }
+          ctx.fillRect(buttonX, buttonY, buttonW, buttonH);
+          ctx.strokeStyle = isAvailable ? "#ffff00" : "#888";
+          ctx.lineWidth = isAvailable ? 3 : 1;
+          ctx.strokeRect(buttonX, buttonY, buttonW, buttonH);
+
+          // Text
+          ctx.fillStyle = isLocked ? "#666" : "white";
+          ctx.font = "11px Arial";
+          ctx.textAlign = "center";
+          if (isUnlocked) {
+            ctx.fillText(skill.upgrades[tier] === "power" ? "POWER" : "YIELD", buttonX + buttonW / 2, buttonY + 18);
+            ctx.font = "9px Arial";
+            ctx.fillText(skillUpgradeOptions[tier][skill.upgrades[tier]].substring(0, 20), buttonX + buttonW / 2, buttonY + 32);
+          } else {
+            ctx.fillText(`Tier ${tierIndex + 1}`, buttonX + buttonW / 2, buttonY + 15);
+            ctx.font = "9px Arial";
+            ctx.fillText(`${tierThreshold} XP`, buttonX + buttonW / 2, buttonY + 28);
+            if (isAvailable) {
+              ctx.fillStyle = "yellow";
+              ctx.fillText("READY!", buttonX + buttonW / 2, buttonY + 38);
+            }
+          }
+        });
+      });
+
+      // Instructions at bottom
+      ctx.fillStyle = "white";
+      ctx.font = "16px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("Click on a green READY! upgrade to choose Power or Yield", canvas.width / 2, canvas.height - 30);
+
+      ctx.restore();
+    }
+
+    // Skill tree button (top-right)
+    function drawSkillTreeButton() {
+      const buttonX = canvas.width - 180;
+      const buttonY = 70;
+      const buttonW = 150;
+      const buttonH = 50;
+
+      skillTreeButtonRect = { x: buttonX, y: buttonY, width: buttonW, height: buttonH };
+
+      const availableCount = getAvailableUpgradesCount();
+
+      // Button background
+      ctx.fillStyle = availableCount > 0 ? "#44ff44" : "rgba(100, 50, 150, 0.8)";
+      ctx.fillRect(buttonX, buttonY, buttonW, buttonH);
+      ctx.strokeStyle = "white";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(buttonX, buttonY, buttonW, buttonH);
+
+      // Text
+      ctx.fillStyle = "white";
+      ctx.font = "18px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("SKILLS (T)", buttonX + buttonW / 2, buttonY + 22);
+
+      // Notification badge
+      if (availableCount > 0) {
+        ctx.fillStyle = "red";
+        ctx.beginPath();
+        ctx.arc(buttonX + buttonW - 10, buttonY + 10, 15, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "white";
+        ctx.font = "bold 14px Arial";
+        ctx.fillText(availableCount.toString(), buttonX + buttonW - 10, buttonY + 15);
+      } else {
+        ctx.fillStyle = "#aaa";
+        ctx.font = "12px Arial";
+        ctx.fillText("No upgrades", buttonX + buttonW / 2, buttonY + 40);
+      }
+    }
+
+    /***************************************
+     * SKILL TREE CLICK HANDLER
+     ***************************************/
+    let skillTreeClickRects = [];
+
+    canvas.addEventListener("click", (event) => {
+      if (skillTreeOpen) {
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = event.clientX - rect.left;
+        const mouseY = event.clientY - rect.top;
+
+        // Check tier button clicks
+        const startY = 80;
+        const rowHeight = 60;
+        const tiers = ["tier1", "tier2", "tier3", "tier4"];
+        const tierX = [420, 560, 700, 840];
+
+        mineralList.forEach((mineral, index) => {
+          const y = startY + index * rowHeight;
+          const skill = mineralSkillTrees[mineral];
+          const availableTier = getAvailableTier(mineral);
+
+          if (availableTier) {
+            const tierIndex = tiers.indexOf(availableTier);
+            const buttonX = tierX[tierIndex];
+            const buttonY = y + 10;
+            const buttonW = 100;
+            const buttonH = 40;
+
+            if (mouseX >= buttonX && mouseX <= buttonX + buttonW &&
+                mouseY >= buttonY && mouseY <= buttonY + buttonH) {
+              // Show choice dialog
+              showSkillUpgradeChoice(mineral, availableTier);
+            }
+          }
+        });
+      }
+
+      // Skill tree button click (always visible)
+      if (skillTreeButtonRect &&
+          event.clientX - canvas.getBoundingClientRect().left >= skillTreeButtonRect.x &&
+          event.clientX - canvas.getBoundingClientRect().left <= skillTreeButtonRect.x + skillTreeButtonRect.width &&
+          event.clientY - canvas.getBoundingClientRect().top >= skillTreeButtonRect.y &&
+          event.clientY - canvas.getBoundingClientRect().top <= skillTreeButtonRect.y + skillTreeButtonRect.height) {
+        skillTreeOpen = !skillTreeOpen;
+        if (skillTreeOpen) {
+          inventoryOpen = false;
+          shopOpen = false;
+        }
+        playSound("inventoryToggle");
+      }
+    });
+
+    // Show skill upgrade choice dialog
+    let skillUpgradeChoice = null;
+
+    function showSkillUpgradeChoice(mineral, tier) {
+      skillUpgradeChoice = { mineral, tier };
+    }
+
+    function drawSkillUpgradeChoice() {
+      if (!skillUpgradeChoice) return;
+
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+      // Modal background
+      ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const boxW = 600;
+      const boxH = 300;
+      const boxX = canvas.width / 2 - boxW / 2;
+      const boxY = canvas.height / 2 - boxH / 2;
+
+      ctx.fillStyle = "#333";
+      ctx.fillRect(boxX, boxY, boxW, boxH);
+      ctx.strokeStyle = "white";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+      // Title
+      ctx.fillStyle = "white";
+      ctx.font = "24px Arial";
+      ctx.textAlign = "center";
+      const { mineral, tier } = skillUpgradeChoice;
+      ctx.fillText(`${mineral} - ${tier.toUpperCase()} Upgrade`, boxX + boxW / 2, boxY + 40);
+
+      // Power button (left)
+      const btnY = boxY + 80;
+      const btnW = 250;
+      const btnH = 120;
+      const powerBtnX = boxX + 50;
+
+      ctx.fillStyle = "#4a9eff";
+      ctx.fillRect(powerBtnX, btnY, btnW, btnH);
+      ctx.strokeStyle = "white";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(powerBtnX, btnY, btnW, btnH);
+
+      ctx.fillStyle = "white";
+      ctx.font = "20px Arial";
+      ctx.fillText("POWER", powerBtnX + btnW / 2, btnY + 30);
+      ctx.font = "14px Arial";
+      const powerText = skillUpgradeOptions[tier].power;
+      ctx.fillText(powerText, powerBtnX + btnW / 2, btnY + 60);
+      ctx.font = "12px Arial";
+      ctx.fillText("Click to choose", powerBtnX + btnW / 2, btnY + 90);
+
+      // Yield button (right)
+      const yieldBtnX = boxX + 300;
+
+      ctx.fillStyle = "#ff9a4a";
+      ctx.fillRect(yieldBtnX, btnY, btnW, btnH);
+      ctx.strokeStyle = "white";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(yieldBtnX, btnY, btnW, btnH);
+
+      ctx.fillStyle = "white";
+      ctx.font = "20px Arial";
+      ctx.fillText("YIELD", yieldBtnX + btnW / 2, btnY + 30);
+      ctx.font = "14px Arial";
+      const yieldText = skillUpgradeOptions[tier].yield;
+      ctx.fillText(yieldText, yieldBtnX + btnW / 2, btnY + 60);
+      ctx.font = "12px Arial";
+      ctx.fillText("Click to choose", yieldBtnX + btnW / 2, btnY + 90);
+
+      // Cancel text
+      ctx.font = "14px Arial";
+      ctx.fillText("Press ESC to cancel", boxX + boxW / 2, boxY + boxH - 20);
+
+      ctx.restore();
+
+      // Handle clicks
+      canvas.onclick = (event) => {
+        if (!skillUpgradeChoice) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = event.clientX - rect.left;
+        const mouseY = event.clientY - rect.top;
+
+        // Power button
+        if (mouseX >= powerBtnX && mouseX <= powerBtnX + btnW &&
+            mouseY >= btnY && mouseY <= btnY + btnH) {
+          applySkillUpgrade(mineral, tier, "power");
+          skillUpgradeChoice = null;
+          canvas.onclick = null;
+        }
+
+        // Yield button
+        if (mouseX >= yieldBtnX && mouseX <= yieldBtnX + btnW &&
+            mouseY >= btnY && mouseY <= btnY + btnH) {
+          applySkillUpgrade(mineral, tier, "yield");
+          skillUpgradeChoice = null;
+          canvas.onclick = null;
+        }
+      };
+
+      // ESC to cancel
+      document.onkeydown = (event) => {
+        if (event.key === "Escape" && skillUpgradeChoice) {
+          skillUpgradeChoice = null;
+          canvas.onclick = null;
+          document.onkeydown = null;
+        }
+      };
     }
 
     /***************************************
@@ -1432,24 +1767,15 @@
 
       drawInventory();
       drawShop();
+      drawSkillTreeButton();
       drawCoordinates();
-      
-      if (pendingSkillUpgrade) {
-        ctx.save();
-        ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = "white";
-        ctx.font = "24px Arial";
-        ctx.textAlign = "center";
-        let mineral = pendingSkillUpgrade.mineral, tier = pendingSkillUpgrade.tier;
-        let options = skillUpgradeOptions[tier];
-        let msg = `Upgrade for ${mineral} (${tier.toUpperCase()})`;
-        let msg2 = `Press P for ${options.power} OR Y for ${options.yield}`;
-        ctx.fillText(msg, canvas.width / 2, canvas.height / 2 - 30);
-        ctx.fillText(msg2, canvas.width / 2, canvas.height / 2 + 10);
-        ctx.restore();
-      }
-      
+
+      // Draw skill tree (full screen overlay)
+      drawSkillTree();
+
+      // Draw skill upgrade choice modal
+      drawSkillUpgradeChoice();
+
       if (feedbackTimer > 0) {
         ctx.font = "20px Arial";
         ctx.fillStyle = "yellow";
