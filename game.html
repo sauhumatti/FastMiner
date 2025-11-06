@@ -116,13 +116,24 @@
       visionUpgradeLevel: 0,
       drillSpeedLevel: 0,
       comboStreak: 0,
-      lastMineTime: 0
+      lastMineTime: 0,
+      energy: 100,
+      maxEnergy: 100
     };
 
     const portalLocations = {};
+    let visitedLevels = new Set([1]); // Track which levels player has visited
+    let levelSelectOpen = false;
 
     // Flag to determine if the game has started.
     let gameStarted = false;
+
+    // Energy system constants
+    const ENERGY_COST_PER_MINE = 1.0; // Each mining action costs 1 energy
+    const ENERGY_RECHARGE_RATE = 3.0; // 3 energy per second (passive)
+    const PORTAL_RECHARGE_MULTIPLIER = 5; // 5x faster on portal (15 energy/sec)
+    let isOnPortal = false;
+    let lastRechargeTime = Date.now();
 
     /***************************************
      * CHUNK MANAGEMENT SYSTEM
@@ -602,6 +613,7 @@
 
       // Transition to new level
       currentLevel = newLevel;
+      visitedLevels.add(newLevel); // Track visited level
       player.x = spawnCenterX;
       player.y = spawnCenterY;
       playerHasLeftPortal = false;
@@ -610,10 +622,11 @@
       player.comboStreak = 0;
       player.lastMineTime = 0;
 
-      // Close shop, inventory, and skill tree
+      // Close shop, inventory, skill tree, and level select
       shopOpen = false;
       inventoryOpen = false;
       skillTreeOpen = false;
+      levelSelectOpen = false;
 
       // Initialize door state for this level if not exists
       if (!doorStates[newLevel]) {
@@ -710,6 +723,7 @@
         }
         player.x = newX;
         player.y = newY;
+        isOnPortal = steppedOnPortal;
         if (Date.now() - lastPlayerMovementSoundTime > PLAYER_MOVEMENT_SOUND_INTERVAL) {
           playSound("playerMovement");
           lastPlayerMovementSoundTime = Date.now();
@@ -717,6 +731,14 @@
         if (steppedOnPortal && playerHasLeftPortal) { transitionToLevel(currentLevel - 1); return; }
         return;
       } else {
+        // Check if player has energy to mine
+        if (player.energy <= 0) {
+          displayPurchaseFeedback("No energy! Return to portal to recharge!");
+          return;
+        }
+
+        // Consume energy for mining action
+        player.energy = Math.max(0, player.energy - ENERGY_COST_PER_MINE);
 
         // Update combo
         updateCombo();
@@ -877,6 +899,7 @@
         shopOpen = !shopOpen;
         if (inventoryOpen || shopOpen) {
           skillTreeOpen = false; // Close skill tree when opening shop
+          levelSelectOpen = false; // Close level select
         }
         playSound("inventoryToggle");
       }
@@ -885,6 +908,16 @@
         if (skillTreeOpen) {
           inventoryOpen = false; // Close others when opening skill tree
           shopOpen = false;
+          levelSelectOpen = false;
+        }
+        playSound("inventoryToggle");
+      }
+      if (event.key === "Enter") {
+        levelSelectOpen = !levelSelectOpen;
+        if (levelSelectOpen) {
+          inventoryOpen = false;
+          shopOpen = false;
+          skillTreeOpen = false;
         }
         playSound("inventoryToggle");
       }
@@ -1366,16 +1399,115 @@
     }
 
     /***************************************
+     * LEVEL SELECTION INTERFACE
+     ***************************************/
+    function drawLevelSelect() {
+      if (!levelSelectOpen) return;
+
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+      // Full screen overlay
+      ctx.fillStyle = "rgba(0, 0, 0, 0.92)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Title
+      ctx.fillStyle = "white";
+      ctx.font = "32px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("LEVEL SELECT (Press Enter to close)", canvas.width / 2, 40);
+
+      // Instructions
+      ctx.font = "18px Arial";
+      ctx.fillText("Click on a level to travel there", canvas.width / 2, 80);
+
+      // Draw level buttons in a grid
+      const buttonWidth = 150;
+      const buttonHeight = 80;
+      const cols = 5;
+      const spacing = 20;
+      const startX = (canvas.width - (cols * buttonWidth + (cols - 1) * spacing)) / 2;
+      const startY = 120;
+
+      for (let level = 1; level <= maxLevel; level++) {
+        const row = Math.floor((level - 1) / cols);
+        const col = (level - 1) % cols;
+        const x = startX + col * (buttonWidth + spacing);
+        const y = startY + row * (buttonHeight + spacing);
+
+        const isVisited = visitedLevels.has(level);
+        const isCurrent = level === currentLevel;
+
+        // Button background
+        if (isCurrent) {
+          ctx.fillStyle = "#44ff44";
+        } else if (isVisited) {
+          ctx.fillStyle = "#4a9eff";
+        } else {
+          ctx.fillStyle = "#444";
+        }
+        ctx.fillRect(x, y, buttonWidth, buttonHeight);
+
+        // Border
+        ctx.strokeStyle = isCurrent ? "#ffff00" : "white";
+        ctx.lineWidth = isCurrent ? 4 : 2;
+        ctx.strokeRect(x, y, buttonWidth, buttonHeight);
+
+        // Text
+        ctx.fillStyle = isVisited ? "white" : "#666";
+        ctx.font = "24px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(`Level ${level}`, x + buttonWidth / 2, y + buttonHeight / 2 - 5);
+
+        if (isCurrent) {
+          ctx.font = "14px Arial";
+          ctx.fillText("(Current)", x + buttonWidth / 2, y + buttonHeight / 2 + 20);
+        } else if (!isVisited) {
+          ctx.font = "12px Arial";
+          ctx.fillText("Locked", x + buttonWidth / 2, y + buttonHeight / 2 + 20);
+        }
+      }
+
+      ctx.restore();
+    }
+
+    /***************************************
      * SKILL TREE CLICK HANDLER
      ***************************************/
     let skillTreeClickRects = [];
 
     canvas.addEventListener("click", (event) => {
-      if (skillTreeOpen) {
-        const rect = canvas.getBoundingClientRect();
-        const mouseX = event.clientX - rect.left;
-        const mouseY = event.clientY - rect.top;
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = event.clientX - rect.left;
+      const mouseY = event.clientY - rect.top;
 
+      // Level select click handler
+      if (levelSelectOpen) {
+        const buttonWidth = 150;
+        const buttonHeight = 80;
+        const cols = 5;
+        const spacing = 20;
+        const startX = (canvas.width - (cols * buttonWidth + (cols - 1) * spacing)) / 2;
+        const startY = 120;
+
+        for (let level = 1; level <= maxLevel; level++) {
+          const row = Math.floor((level - 1) / cols);
+          const col = (level - 1) % cols;
+          const x = startX + col * (buttonWidth + spacing);
+          const y = startY + row * (buttonHeight + spacing);
+
+          if (mouseX >= x && mouseX <= x + buttonWidth &&
+              mouseY >= y && mouseY <= y + buttonHeight) {
+            if (visitedLevels.has(level) && level !== currentLevel) {
+              transitionToLevel(level);
+              levelSelectOpen = false;
+            }
+          }
+        }
+        return; // Don't process other clicks when level select is open
+      }
+
+      if (skillTreeOpen) {
         // Check tier button clicks
         const startY = 80;
         const rowHeight = 60;
@@ -1401,18 +1533,20 @@
             }
           }
         });
+        return; // Don't process other clicks when skill tree is open
       }
 
       // Skill tree button click (always visible)
       if (skillTreeButtonRect &&
-          event.clientX - canvas.getBoundingClientRect().left >= skillTreeButtonRect.x &&
-          event.clientX - canvas.getBoundingClientRect().left <= skillTreeButtonRect.x + skillTreeButtonRect.width &&
-          event.clientY - canvas.getBoundingClientRect().top >= skillTreeButtonRect.y &&
-          event.clientY - canvas.getBoundingClientRect().top <= skillTreeButtonRect.y + skillTreeButtonRect.height) {
+          mouseX >= skillTreeButtonRect.x &&
+          mouseX <= skillTreeButtonRect.x + skillTreeButtonRect.width &&
+          mouseY >= skillTreeButtonRect.y &&
+          mouseY <= skillTreeButtonRect.y + skillTreeButtonRect.height) {
         skillTreeOpen = !skillTreeOpen;
         if (skillTreeOpen) {
           inventoryOpen = false;
           shopOpen = false;
+          levelSelectOpen = false;
         }
         playSound("inventoryToggle");
       }
@@ -1640,6 +1774,20 @@
 
     function render() {
       updateVision();
+
+      // Energy recharge system
+      const now = Date.now();
+      const deltaTime = (now - lastRechargeTime) / 1000; // Convert to seconds
+      lastRechargeTime = now;
+
+      if (isOnPortal) {
+        // Fast recharge when on portal
+        player.energy = Math.min(player.maxEnergy, player.energy + (ENERGY_RECHARGE_RATE * PORTAL_RECHARGE_MULTIPLIER * deltaTime));
+      } else {
+        // Automatic passive recharge
+        player.energy = Math.min(player.maxEnergy, player.energy + (ENERGY_RECHARGE_RATE * deltaTime));
+      }
+
       let playerCenterX = tileToPixel(player.x + player.size/2);
       let playerCenterY = tileToPixel(player.y + player.size/2);
       let cameraX = playerCenterX - canvas.width / 2;
@@ -1739,8 +1887,45 @@
         }
       }
 
-      ctx.fillStyle = "white";
-      ctx.fillRect(tileToPixel(player.x), tileToPixel(player.y), tileSize * player.size, tileSize * player.size);
+      // Draw player with energy glow effect
+      const playerPixelX = tileToPixel(player.x);
+      const playerPixelY = tileToPixel(player.y);
+      const playerPixelSize = tileSize * player.size;
+
+      // Draw glow effect based on energy level
+      const energyPercent = player.energy / player.maxEnergy;
+      if (energyPercent > 0.25) {
+        const glowSize = playerPixelSize + 8;
+        const glowX = playerPixelX - 4;
+        const glowY = playerPixelY - 4;
+
+        ctx.save();
+        ctx.shadowColor = energyPercent > 0.75 ? "#ffeb3b" : energyPercent > 0.50 ? "#ff9800" : "#ff5722";
+        ctx.shadowBlur = 15 * energyPercent;
+        ctx.fillStyle = "white";
+        ctx.fillRect(playerPixelX, playerPixelY, playerPixelSize, playerPixelSize);
+        ctx.restore();
+
+        // Draw sparkle particles around player
+        const numSparkles = Math.ceil(8 * energyPercent);
+        const time = Date.now() / 1000;
+        for (let i = 0; i < numSparkles; i++) {
+          const angle = (i / numSparkles) * Math.PI * 2 + time;
+          const distance = 20 + Math.sin(time * 2 + i) * 5;
+          const sparkleX = playerPixelX + playerPixelSize / 2 + Math.cos(angle) * distance;
+          const sparkleY = playerPixelY + playerPixelSize / 2 + Math.sin(angle) * distance;
+          const sparkleSize = 3 * energyPercent;
+
+          ctx.fillStyle = `rgba(255, 235, 59, ${energyPercent * 0.8})`;
+          ctx.beginPath();
+          ctx.arc(sparkleX, sparkleY, sparkleSize, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else {
+        // Low energy - just draw player without glow
+        ctx.fillStyle = "white";
+        ctx.fillRect(playerPixelX, playerPixelY, playerPixelSize, playerPixelSize);
+      }
       ctx.restore();
       drawDynamicLighting(cameraX, cameraY);
 
@@ -1765,6 +1950,43 @@
         ctx.fillText(`+${Math.floor((getComboMultiplier() - 1) * 100)}% damage`, 10, 50);
       }
 
+      // Energy bar display (top-left below combo)
+      const energyBarY = player.comboStreak > 0 ? 70 : 20;
+      const energyBarX = 10;
+      const energyBarWidth = 200;
+      const energyBarHeight = 30;
+      const energyPercent = player.energy / player.maxEnergy;
+
+      // Background
+      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+      ctx.fillRect(energyBarX, energyBarY, energyBarWidth, energyBarHeight);
+
+      // Energy fill (color based on percentage)
+      let energyColor = "#ffeb3b"; // Yellow
+      if (energyPercent <= 0.25) energyColor = "#f44336"; // Red
+      else if (energyPercent <= 0.50) energyColor = "#ff9800"; // Orange
+
+      ctx.fillStyle = energyColor;
+      ctx.fillRect(energyBarX, energyBarY, energyBarWidth * energyPercent, energyBarHeight);
+
+      // Border
+      ctx.strokeStyle = "white";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(energyBarX, energyBarY, energyBarWidth, energyBarHeight);
+
+      // Text
+      ctx.fillStyle = "white";
+      ctx.font = "14px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(`ENERGY: ${Math.ceil(player.energy)}/${player.maxEnergy}`, energyBarX + energyBarWidth / 2, energyBarY + energyBarHeight / 2 + 5);
+
+      // Portal recharge indicator
+      if (isOnPortal) {
+        ctx.font = "12px Arial";
+        ctx.fillStyle = "#00ff00";
+        ctx.fillText("⚡ FAST RECHARGE", energyBarX + energyBarWidth / 2, energyBarY + energyBarHeight + 15);
+      }
+
       drawInventory();
       drawShop();
       drawSkillTreeButton();
@@ -1772,6 +1994,9 @@
 
       // Draw skill tree (full screen overlay)
       drawSkillTree();
+
+      // Draw level select (full screen overlay)
+      drawLevelSelect();
 
       // Draw skill upgrade choice modal
       drawSkillUpgradeChoice();
