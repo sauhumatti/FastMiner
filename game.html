@@ -407,6 +407,13 @@
               tile.hp = 0;
               tile.maxHp = 0;
             }
+
+            // Place recharge station at spawn in level 1
+            if (level === 1 && worldX === spawnCenterX && worldY === spawnCenterY) {
+              tile.type = "recharge";
+              tile.hp = 0;
+              tile.maxHp = 0;
+            }
           } else {
             const random = seededRandom(chunkX, chunkY, level, localX, localY);
             const oreRarity = oreMapping[level].rarity;
@@ -663,11 +670,17 @@
 
     // Drill speed upgrade levels
     function getContinuousMoveInterval() {
-      const baseInterval = 250;
-      if (player.drillSpeedLevel === 0) return baseInterval;
-      if (player.drillSpeedLevel === 1) return 200;
-      if (player.drillSpeedLevel === 2) return 150;
-      if (player.drillSpeedLevel >= 3) return 100;
+      let baseInterval = 250;
+      if (player.drillSpeedLevel === 0) baseInterval = 250;
+      else if (player.drillSpeedLevel === 1) baseInterval = 200;
+      else if (player.drillSpeedLevel === 2) baseInterval = 150;
+      else if (player.drillSpeedLevel >= 3) baseInterval = 100;
+
+      // Half speed (double interval) when out of energy
+      if (player.energy <= 0) {
+        return baseInterval * 2;
+      }
+
       return baseInterval;
     }
 
@@ -705,7 +718,7 @@
       for (let i = 0; i < player.size; i++) {
         for (let j = 0; j < player.size; j++) {
           let tile = getTileAt(newX + i, newY + j, currentLevel);
-          if (tile.type !== "mined" && !(tile.type === "door" && tile.doorFor === "prev")) {
+          if (tile.type !== "mined" && !(tile.type === "door" && tile.doorFor === "prev") && tile.type !== "recharge") {
             fullyPassable = false;
             break;
           }
@@ -715,15 +728,17 @@
 
       if (fullyPassable) {
         let steppedOnPortal = false;
+        let steppedOnRecharge = false;
         for (let i = 0; i < player.size; i++) {
           for (let j = 0; j < player.size; j++) {
             let tile = getTileAt(newX + i, newY + j, currentLevel);
             if (tile.type === "door" && tile.doorFor === "prev") steppedOnPortal = true;
+            if (tile.type === "recharge") steppedOnRecharge = true;
           }
         }
         player.x = newX;
         player.y = newY;
-        isOnPortal = steppedOnPortal;
+        isOnPortal = steppedOnPortal || steppedOnRecharge;
         if (Date.now() - lastPlayerMovementSoundTime > PLAYER_MOVEMENT_SOUND_INTERVAL) {
           playSound("playerMovement");
           lastPlayerMovementSoundTime = Date.now();
@@ -854,7 +869,9 @@
       const currentTime = Date.now();
       currentDirection = direction;
       isMoving = true;
-      if (currentTime - lastDamageTimes[direction] >= TAP_MOVE_COOLDOWN) {
+      // Apply half speed when out of energy
+      const tapCooldown = player.energy <= 0 ? TAP_MOVE_COOLDOWN * 2 : TAP_MOVE_COOLDOWN;
+      if (currentTime - lastDamageTimes[direction] >= tapCooldown) {
         let dx = 0, dy = 0;
         if (direction === "up") dy = -1;
         if (direction === "down") dy = 1;
@@ -1823,6 +1840,7 @@
 
               let baseColor = "black";
               if (tile.type === "mined") baseColor = "gray";
+              else if (tile.type === "recharge") baseColor = "#00ff00"; // Green for recharge station
               else if (tile.type === "door") {
                 if (tile.doorFor === "next") baseColor = (tile.doorState === "locked") ? "darkred" : "gold";
                 else if (tile.doorFor === "prev") baseColor = "cyan";
@@ -1875,6 +1893,30 @@
                   }
                 }
                 else if (tile.type === "door") { drawDoorAnimation(tileX, tileY, tileSize, tileSize, tile.doorState === "locked"); }
+                else if (tile.type === "recharge") {
+                  // Draw pulsing energy circle animation
+                  const pulseSpeed = 1500;
+                  const pulsePhase = (Date.now() % pulseSpeed) / pulseSpeed;
+                  const pulseSize = 8 + Math.sin(pulsePhase * Math.PI * 2) * 4;
+
+                  ctx.save();
+                  ctx.strokeStyle = "#00ff00";
+                  ctx.lineWidth = 3;
+                  ctx.globalAlpha = 0.5 + Math.sin(pulsePhase * Math.PI * 2) * 0.3;
+                  ctx.beginPath();
+                  ctx.arc(tileX + tileSize / 2, tileY + tileSize / 2, pulseSize, 0, Math.PI * 2);
+                  ctx.stroke();
+                  ctx.restore();
+
+                  // Draw lightning bolt symbol
+                  ctx.save();
+                  ctx.fillStyle = "yellow";
+                  ctx.font = "20px Arial";
+                  ctx.textAlign = "center";
+                  ctx.textBaseline = "middle";
+                  ctx.fillText("⚡", tileX + tileSize / 2, tileY + tileSize / 2);
+                  ctx.restore();
+                }
                 if ((tile.type === "ground" || tile.type === "ore") && tile.maxHp > 0) {
                   const hpRatio = tile.hp / tile.maxHp;
                   drawCracks(tileX, tileY, tileSize, tileSize, hpRatio);
