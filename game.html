@@ -1895,16 +1895,14 @@
       // Draw glow effect based on energy level
       const energyPercent = player.energy / player.maxEnergy;
       if (energyPercent > 0.25) {
-        const glowSize = playerPixelSize + 8;
-        const glowX = playerPixelX - 4;
-        const glowY = playerPixelY - 4;
-
-        ctx.save();
+        // Draw player with shadow glow
         ctx.shadowColor = energyPercent > 0.75 ? "#ffeb3b" : energyPercent > 0.50 ? "#ff9800" : "#ff5722";
         ctx.shadowBlur = 15 * energyPercent;
         ctx.fillStyle = "white";
         ctx.fillRect(playerPixelX, playerPixelY, playerPixelSize, playerPixelSize);
-        ctx.restore();
+
+        // Reset shadow
+        ctx.shadowBlur = 0;
 
         // Draw sparkle particles around player
         const numSparkles = Math.ceil(8 * energyPercent);
