@@ -1335,40 +1335,45 @@
           ctx.fill();
           ctx.stroke();
 
-          // Draw level text
-          ctx.fillStyle = isLockedLevel ? "#666" : "white";
-          ctx.font = "14px Arial";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          const label = branch.getLabel(level);
-          const lines = label.split('\n');
-          lines.forEach((line, idx) => {
-            ctx.fillText(line, branch.x, y + (lines.length > 1 ? (idx - 0.5) * 15 : 0));
-          });
+          // Draw content inside node based on state
+          if (isPastLevel) {
+            // Draw checkmark for completed
+            ctx.fillStyle = branch.color;
+            ctx.font = "30px Arial";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("✓", branch.x, y);
+          } else if (isLockedLevel) {
+            // Draw lock for locked nodes
+            ctx.fillStyle = "#666";
+            ctx.font = "24px Arial";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("🔒", branch.x, y);
+          } else {
+            // Draw level text for current/next levels
+            ctx.fillStyle = "white";
+            ctx.font = "13px Arial";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            const label = branch.getLabel(level);
+            const lines = label.split('\n');
+            lines.forEach((line, idx) => {
+              ctx.fillText(line, branch.x, y + (lines.length > 1 ? (idx - 0.5) * 14 : 0));
+            });
+          }
 
-          // Draw cost for next level
+          // Draw cost for next level (below node)
           if (isNextLevel) {
             const cost = branch.getCost();
             if (cost) {
               const costStr = costToString(cost);
               ctx.font = "10px Arial";
               ctx.fillStyle = canAfford(cost) ? "#00ff00" : "#ff0000";
-              ctx.fillText(costStr, branch.x, y + nodeSize / 2 + 12);
+              ctx.textAlign = "center";
+              ctx.textBaseline = "top";
+              ctx.fillText(costStr, branch.x, y + nodeSize / 2 + 8);
             }
-          }
-
-          // Draw checkmark for completed
-          if (isPastLevel) {
-            ctx.fillStyle = branch.color;
-            ctx.font = "24px Arial";
-            ctx.fillText("✓", branch.x, y);
-          }
-
-          // Draw lock for locked nodes
-          if (isLockedLevel) {
-            ctx.fillStyle = "#666";
-            ctx.font = "20px Arial";
-            ctx.fillText("🔒", branch.x, y);
           }
         }
 
