@@ -130,8 +130,8 @@
 
     // Energy system constants
     const ENERGY_COST_PER_MINE = 1.0; // Each mining action costs 1 energy
-    const ENERGY_RECHARGE_RATE = 3.0; // 3 energy per second (passive)
-    const PORTAL_RECHARGE_MULTIPLIER = 5; // 5x faster on portal (15 energy/sec)
+    const ENERGY_RECHARGE_RATE = 3.0; // Base recharge rate (only at stations)
+    const PORTAL_RECHARGE_MULTIPLIER = 5; // Recharge stations: 15 energy/sec (3 * 5)
     let isOnPortal = false;
     let lastRechargeTime = Date.now();
 
@@ -1790,18 +1790,16 @@
     function render() {
       updateVision();
 
-      // Energy recharge system
+      // Energy recharge system - only at recharge stations/portals
       const now = Date.now();
       const deltaTime = (now - lastRechargeTime) / 1000; // Convert to seconds
       lastRechargeTime = now;
 
       if (isOnPortal) {
-        // Fast recharge when on portal
+        // Recharge when on portal or recharge station
         player.energy = Math.min(player.maxEnergy, player.energy + (ENERGY_RECHARGE_RATE * PORTAL_RECHARGE_MULTIPLIER * deltaTime));
-      } else {
-        // Automatic passive recharge
-        player.energy = Math.min(player.maxEnergy, player.energy + (ENERGY_RECHARGE_RATE * deltaTime));
       }
+      // No automatic passive recharge - must return to recharge station
 
       let playerCenterX = tileToPixel(player.x + player.size/2);
       let playerCenterY = tileToPixel(player.y + player.size/2);
@@ -2018,11 +2016,11 @@
       ctx.textAlign = "center";
       ctx.fillText(`ENERGY: ${Math.ceil(player.energy)}/${player.maxEnergy}`, energyBarX + energyBarWidth / 2, energyBarY + energyBarHeight / 2 + 5);
 
-      // Portal recharge indicator
+      // Recharge station indicator
       if (isOnPortal) {
         ctx.font = "12px Arial";
         ctx.fillStyle = "#00ff00";
-        ctx.fillText("⚡ FAST RECHARGE", energyBarX + energyBarWidth / 2, energyBarY + energyBarHeight + 15);
+        ctx.fillText("⚡ RECHARGING", energyBarX + energyBarWidth / 2, energyBarY + energyBarHeight + 15);
       }
 
       drawInventory();
