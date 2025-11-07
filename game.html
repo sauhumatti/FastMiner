@@ -973,8 +973,6 @@
       return Object.entries(cost).map(([mineral, amount]) => `${amount} ${mineral}`).join(", ");
     }
 
-    let shopSpeedButtonRect = null;
-
     canvas.addEventListener("click", (event) => {
       if (!shopOpen) return;
       const rect = canvas.getBoundingClientRect();
