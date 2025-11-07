@@ -996,73 +996,115 @@
       const mouseX = event.clientX - rect.left;
       const mouseY = event.clientY - rect.top;
 
-      if (shopDrillButtonRect &&
-          mouseX >= shopDrillButtonRect.x && mouseX <= shopDrillButtonRect.x + shopDrillButtonRect.width &&
-          mouseY >= shopDrillButtonRect.y && mouseY <= shopDrillButtonRect.y + shopDrillButtonRect.height) {
-        const cost = getDrillUpgradeCost();
-        if (canAfford(cost)) {
-          payCost(cost);
-          player.drillUpgradeLevel++;
-          console.log("Purchased drill upgrade! New drill damage: " + (1 + player.drillUpgradeLevel));
-          playSound("purchaseSuccess");
-          displayPurchaseFeedback("Drill power upgraded!");
-        } else {
-          console.log("Not enough materials for drill upgrade!");
-          playSound("purchaseFailure");
-          displayPurchaseFeedback("Not enough materials!");
+      // Skill tree node click detection
+      const centerX = canvas.width / 2;
+      const startY = 120;
+      const branchWidth = 300;
+      const nodeSize = 70;
+      const nodeSpacing = 90;
+
+      const branches = [
+        {
+          name: "drill",
+          x: centerX - branchWidth * 1.5,
+          currentLevel: player.drillUpgradeLevel,
+          maxLevel: 20,
+          getCost: getDrillUpgradeCost,
+          upgrade: () => {
+            const cost = getDrillUpgradeCost();
+            if (canAfford(cost)) {
+              payCost(cost);
+              player.drillUpgradeLevel++;
+              console.log("Purchased drill upgrade! New drill damage: " + (1 + player.drillUpgradeLevel));
+              playSound("purchaseSuccess");
+              displayPurchaseFeedback("Drill power upgraded!");
+            } else {
+              playSound("purchaseFailure");
+              displayPurchaseFeedback("Not enough materials!");
+            }
+          }
+        },
+        {
+          name: "size",
+          x: centerX - branchWidth * 0.5,
+          currentLevel: player.size,
+          maxLevel: 3,
+          getCost: getSizeUpgradeCost,
+          upgrade: () => {
+            const cost = getSizeUpgradeCost();
+            if (cost && canAfford(cost)) {
+              payCost(cost);
+              player.size++;
+              player.x = spawnCenterX;
+              player.y = spawnCenterY;
+              console.log("Purchased size upgrade! New player size: " + player.size + "×" + player.size);
+              playSound("purchaseSuccess");
+              displayPurchaseFeedback("Size upgraded!");
+            } else {
+              playSound("purchaseFailure");
+              displayPurchaseFeedback("Not enough materials!");
+            }
+          }
+        },
+        {
+          name: "vision",
+          x: centerX + branchWidth * 0.5,
+          currentLevel: player.visionUpgradeLevel,
+          maxLevel: 10,
+          getCost: getVisionUpgradeCost,
+          upgrade: () => {
+            const cost = getVisionUpgradeCost();
+            if (canAfford(cost)) {
+              payCost(cost);
+              player.visionUpgradeLevel++;
+              updateVision();
+              console.log("Purchased vision upgrade! New effective vision radius: " + (VISION_RADIUS + player.visionUpgradeLevel));
+              playSound("purchaseSuccess");
+              displayPurchaseFeedback("Vision upgraded!");
+            } else {
+              playSound("purchaseFailure");
+              displayPurchaseFeedback("Not enough materials!");
+            }
+          }
+        },
+        {
+          name: "speed",
+          x: centerX + branchWidth * 1.5,
+          currentLevel: player.drillSpeedLevel,
+          maxLevel: 3,
+          getCost: getDrillSpeedCost,
+          upgrade: () => {
+            const cost = getDrillSpeedCost();
+            if (cost && canAfford(cost)) {
+              payCost(cost);
+              player.drillSpeedLevel++;
+              console.log("Purchased drill speed upgrade! New mining interval: " + getContinuousMoveInterval() + "ms");
+              playSound("purchaseSuccess");
+              displayPurchaseFeedback("Drill speed upgraded!");
+            } else {
+              playSound("purchaseFailure");
+              displayPurchaseFeedback("Not enough materials!");
+            }
+          }
         }
-      }
-      if (shopSizeButtonRect &&
-          mouseX >= shopSizeButtonRect.x && mouseX <= shopSizeButtonRect.x + shopSizeButtonRect.width &&
-          mouseY >= shopSizeButtonRect.y && mouseY <= shopSizeButtonRect.y + shopSizeButtonRect.height) {
-        const cost = getSizeUpgradeCost();
-        if (cost && canAfford(cost)) {
-          payCost(cost);
-          player.size++;
-          player.x = spawnCenterX;
-          player.y = spawnCenterY;
-          console.log("Purchased size upgrade! New player size: " + player.size + "×" + player.size + " (damage penalty applied)");
-          playSound("purchaseSuccess");
-          displayPurchaseFeedback("Size upgraded!");
-        } else {
-          console.log("Cannot afford size upgrade!");
-          playSound("purchaseFailure");
-          displayPurchaseFeedback("Not enough materials!");
+      ];
+
+      // Check if click is on a next-level node (purchasable)
+      branches.forEach(branch => {
+        const nextLevel = branch.currentLevel + 1;
+        if (nextLevel <= branch.maxLevel) {
+          const nodeY = startY + 20 + nextLevel * nodeSpacing;
+          const distance = Math.sqrt(Math.pow(mouseX - branch.x, 2) + Math.pow(mouseY - nodeY, 2));
+
+          if (distance <= nodeSize / 2) {
+            // Clicked on this node
+            const cost = branch.getCost();
+            if (cost && canAfford(cost)) {
+              branch.upgrade();
+            }
+          }
         }
-      }
-      if (shopVisionButtonRect &&
-          mouseX >= shopVisionButtonRect.x && mouseX <= shopVisionButtonRect.x + shopVisionButtonRect.width &&
-          mouseY >= shopVisionButtonRect.y && mouseY <= shopVisionButtonRect.y + shopVisionButtonRect.height) {
-        const cost = getVisionUpgradeCost();
-        if (canAfford(cost)) {
-          payCost(cost);
-          player.visionUpgradeLevel++;
-          updateVision();
-          console.log("Purchased vision upgrade! New effective vision radius: " + (VISION_RADIUS + player.visionUpgradeLevel));
-          playSound("purchaseSuccess");
-          displayPurchaseFeedback("Vision upgraded!");
-        } else {
-          console.log("Not enough materials for vision upgrade!");
-          playSound("purchaseFailure");
-          displayPurchaseFeedback("Not enough materials!");
-        }
-      }
-      if (shopSpeedButtonRect &&
-          mouseX >= shopSpeedButtonRect.x && mouseX <= shopSpeedButtonRect.x + shopSpeedButtonRect.width &&
-          mouseY >= shopSpeedButtonRect.y && mouseY <= shopSpeedButtonRect.y + shopSpeedButtonRect.height) {
-        const cost = getDrillSpeedCost();
-        if (cost && canAfford(cost)) {
-          payCost(cost);
-          player.drillSpeedLevel++;
-          console.log("Purchased drill speed upgrade! New mining interval: " + getContinuousMoveInterval() + "ms");
-          playSound("purchaseSuccess");
-          displayPurchaseFeedback("Drill speed upgraded!");
-        } else {
-          console.log("Cannot afford drill speed upgrade!");
-          playSound("purchaseFailure");
-          displayPurchaseFeedback("Not enough materials!");
-        }
-      }
+      });
     });
 
     function quickBuyDrill() {
@@ -1168,76 +1210,178 @@
     }
 
     /***************************************
-     * DRAW SHOP FUNCTION (Left Side Below Inventory)
+     * DRAW UPGRADE SKILL TREE (Replaces Shop)
      ***************************************/
-    function drawShop() {
+    function drawUpgradeSkillTree() {
       if (!shopOpen) return;
-      const shopWidth = 300, shopHeight = 420;
-      const shopPosX = 40, shopPosY = canvas.height - shopHeight - 40;
-      ctx.fillStyle = "rgba(50,50,50,0.9)";
-      ctx.fillRect(shopPosX, shopPosY, shopWidth, shopHeight);
-      ctx.strokeStyle = "white";
-      ctx.strokeRect(shopPosX, shopPosY, shopWidth, shopHeight);
+
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+      // Full screen overlay
+      ctx.fillStyle = "rgba(0, 0, 0, 0.92)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Title
       ctx.fillStyle = "white";
-      ctx.font = "22px Arial";
+      ctx.font = "32px Arial";
       ctx.textAlign = "center";
-      ctx.fillText("Upgrade Shop (1-4)", shopPosX + shopWidth / 2, shopPosY + 30);
-      const boxWidth = shopWidth - 40, boxHeight = 70, startX = shopPosX + 20;
-      let currentY = shopPosY + 50;
+      ctx.fillText("UPGRADE TREE (Press S to close)", canvas.width / 2, 40);
 
-      // Drill upgrade
-      const drillCost = getDrillUpgradeCost();
-      const canAffordDrill = canAfford(drillCost);
-      shopDrillButtonRect = { x: startX, y: currentY, width: boxWidth, height: boxHeight };
-      drawUpgradeItem(startX, currentY, boxWidth, boxHeight, "Drill Power +1", costToString(drillCost), canAffordDrill);
-      currentY += boxHeight + 10;
+      // Instructions
+      ctx.font = "16px Arial";
+      ctx.fillText("Click on available upgrades to purchase", canvas.width / 2, 70);
 
-      // Size upgrade
-      if (player.size < 3) {
-        const sizeCost = getSizeUpgradeCost();
-        const canAffordSize = canAfford(sizeCost);
-        shopSizeButtonRect = { x: startX, y: currentY, width: boxWidth, height: boxHeight };
-        drawUpgradeItem(startX, currentY, boxWidth, boxHeight, `Size +1 (${player.size}x to ${player.size+1}x)`, costToString(sizeCost), canAffordSize);
-        currentY += boxHeight + 10;
-      } else {
-        shopSizeButtonRect = null;
-      }
+      const centerX = canvas.width / 2;
+      const startY = 120;
+      const branchWidth = 300;
+      const nodeSize = 70;
+      const nodeSpacing = 90;
 
-      // Vision upgrade
-      const visionCost = getVisionUpgradeCost();
-      const canAffordVision = canAfford(visionCost);
-      shopVisionButtonRect = { x: startX, y: currentY, width: boxWidth, height: boxHeight };
-      drawUpgradeItem(startX, currentY, boxWidth, boxHeight, "Vision +1", costToString(visionCost), canAffordVision);
-      currentY += boxHeight + 10;
+      // Four branches: Drill Power, Size, Vision, Drill Speed
+      const branches = [
+        {
+          title: "DRILL POWER",
+          x: centerX - branchWidth * 1.5,
+          color: "#ff4444",
+          maxLevel: 20,
+          currentLevel: player.drillUpgradeLevel,
+          getCost: getDrillUpgradeCost,
+          getLabel: (level) => `Level ${level}\n+${level} Damage`
+        },
+        {
+          title: "SIZE",
+          x: centerX - branchWidth * 0.5,
+          color: "#4444ff",
+          maxLevel: 3,
+          currentLevel: player.size,
+          getCost: getSizeUpgradeCost,
+          getLabel: (level) => level === 1 ? "1x1" : level === 2 ? "2x2" : "3x3"
+        },
+        {
+          title: "VISION",
+          x: centerX + branchWidth * 0.5,
+          color: "#ff44ff",
+          maxLevel: 10,
+          currentLevel: player.visionUpgradeLevel,
+          getCost: getVisionUpgradeCost,
+          getLabel: (level) => `Level ${level}\nRange +${level}`
+        },
+        {
+          title: "DRILL SPEED",
+          x: centerX + branchWidth * 1.5,
+          color: "#44ff44",
+          maxLevel: 3,
+          currentLevel: player.drillSpeedLevel,
+          getCost: getDrillSpeedCost,
+          getLabel: (level) => {
+            if (level === 0) return "250ms";
+            if (level === 1) return "200ms";
+            if (level === 2) return "150ms";
+            if (level === 3) return "100ms";
+          }
+        }
+      ];
 
-      // Drill speed upgrade
-      if (player.drillSpeedLevel < 3) {
-        const speedCost = getDrillSpeedCost();
-        const canAffordSpeed = canAfford(speedCost);
-        shopSpeedButtonRect = { x: startX, y: currentY, width: boxWidth, height: boxHeight };
-        const speedLabel = player.drillSpeedLevel === 0 ? "Drill Speed (250→200ms)" :
-                          player.drillSpeedLevel === 1 ? "Drill Speed (200→150ms)" :
-                          "Drill Speed (150→100ms)";
-        drawUpgradeItem(startX, currentY, boxWidth, boxHeight, speedLabel, costToString(speedCost), canAffordSpeed);
-      } else {
-        shopSpeedButtonRect = null;
-      }
+      branches.forEach(branch => {
+        // Draw branch title
+        ctx.fillStyle = branch.color;
+        ctx.font = "20px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(branch.title, branch.x, startY - 10);
 
-      ctx.textAlign = "left";
-    }
+        // Draw nodes
+        const nodesToShow = Math.min(5, branch.maxLevel + 1); // Show up to 5 levels
+        for (let i = 0; i < nodesToShow; i++) {
+          const level = i;
+          const y = startY + 20 + i * nodeSpacing;
+          const isCurrentLevel = level === branch.currentLevel;
+          const isNextLevel = level === branch.currentLevel + 1;
+          const isPastLevel = level < branch.currentLevel;
+          const isLockedLevel = level > branch.currentLevel + 1;
 
-    function drawUpgradeItem(x, y, width, height, label, cost, available) {
-      ctx.fillStyle = available ? "green" : "grey";
-      ctx.fillRect(x, y, width, height);
-      ctx.strokeStyle = "white";
-      ctx.strokeRect(x, y, width, height);
-      ctx.fillStyle = "white";
-      ctx.font = "14px Arial";
-      ctx.textAlign = "center";
-      ctx.fillText(label, x + width / 2, y + height / 2 - 10);
-      ctx.font = "12px Arial";
-      ctx.fillText(`Cost: ${cost}`, x + width / 2, y + height / 2 + 10);
-      ctx.textAlign = "left";
+          // Draw connection line to previous node
+          if (i > 0) {
+            ctx.strokeStyle = isPastLevel || isCurrentLevel ? branch.color : "#444";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(branch.x, y - nodeSpacing + nodeSize / 2);
+            ctx.lineTo(branch.x, y - nodeSize / 2);
+            ctx.stroke();
+          }
+
+          // Draw node circle
+          ctx.beginPath();
+          ctx.arc(branch.x, y, nodeSize / 2, 0, Math.PI * 2);
+
+          if (isPastLevel) {
+            ctx.fillStyle = "#333"; // Completed
+            ctx.strokeStyle = branch.color;
+          } else if (isCurrentLevel) {
+            ctx.fillStyle = branch.color; // Current level
+            ctx.strokeStyle = "white";
+          } else if (isNextLevel) {
+            // Check if can afford
+            const cost = branch.getCost();
+            const affordable = cost && canAfford(cost);
+            ctx.fillStyle = affordable ? "#44ff44" : "#666"; // Green if affordable
+            ctx.strokeStyle = affordable ? "yellow" : "#888";
+          } else {
+            ctx.fillStyle = "#222"; // Locked
+            ctx.strokeStyle = "#444";
+          }
+
+          ctx.lineWidth = isCurrentLevel ? 4 : 2;
+          ctx.fill();
+          ctx.stroke();
+
+          // Draw level text
+          ctx.fillStyle = isLockedLevel ? "#666" : "white";
+          ctx.font = "14px Arial";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          const label = branch.getLabel(level);
+          const lines = label.split('\n');
+          lines.forEach((line, idx) => {
+            ctx.fillText(line, branch.x, y + (lines.length > 1 ? (idx - 0.5) * 15 : 0));
+          });
+
+          // Draw cost for next level
+          if (isNextLevel) {
+            const cost = branch.getCost();
+            if (cost) {
+              const costStr = costToString(cost);
+              ctx.font = "10px Arial";
+              ctx.fillStyle = canAfford(cost) ? "#00ff00" : "#ff0000";
+              ctx.fillText(costStr, branch.x, y + nodeSize / 2 + 12);
+            }
+          }
+
+          // Draw checkmark for completed
+          if (isPastLevel) {
+            ctx.fillStyle = branch.color;
+            ctx.font = "24px Arial";
+            ctx.fillText("✓", branch.x, y);
+          }
+
+          // Draw lock for locked nodes
+          if (isLockedLevel) {
+            ctx.fillStyle = "#666";
+            ctx.font = "20px Arial";
+            ctx.fillText("🔒", branch.x, y);
+          }
+        }
+
+        // Draw "MAX" if at max level
+        if (branch.currentLevel >= branch.maxLevel) {
+          const y = startY + 20 + nodesToShow * nodeSpacing;
+          ctx.fillStyle = "gold";
+          ctx.font = "24px Arial";
+          ctx.fillText("MAX", branch.x, y);
+        }
+      });
+
+      ctx.restore();
     }
 
     function drawButton(ctx, x, y, width, height, text, type) {
@@ -2024,7 +2168,7 @@
       }
 
       drawInventory();
-      drawShop();
+      drawUpgradeSkillTree();
       drawSkillTreeButton();
       drawCoordinates();
 
